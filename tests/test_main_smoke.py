@@ -37,6 +37,8 @@ class GameSmokeTests(unittest.TestCase):
 
         self.main = main
         self.game = main.Game()
+        # Tests exercise post-intro states; skip straight past the splash.
+        self.game.state = "MENU"
         self.canvas = pygame.Surface((1280, 720))
 
     def tearDown(self):
@@ -281,13 +283,70 @@ class GameSmokeTests(unittest.TestCase):
         infinite = next(b for b in self.game.buttons if b.label == "Infinite Mode")
         self.assertTrue(infinite.enabled)
 
-    def test_infinite_mode_ends_and_records_best_time(self):
+    def test_infinite_mode_ends_and_records_best_score(self):
         self._run_until("LEVEL_COMPLETE", max_steps=500, answer_correct=True)
         self.game._replay_infinite()
-        steps = self._run_until("INFINITE_RESULTS", max_steps=2000, answer_correct=False)
+        # One correct answer first (it heals and scores a point), then miss
+        # until health runs out, so the run ends with a score worth checking.
+        self._reveal_papers()
+        self.game.resolve_answer(True, timeout=False)
+        self._finish_feedback()
+        self.assertEqual(self.game.infinite_correct, 1)
+        steps = 0
+        while self.game.state != "INFINITE_RESULTS" and steps < 200:
+            steps += 1
+            if self.game.state == "GAMEPLAY" and self.game.dialogue_phase == "DONE" and not self.game.answered:
+                self.game.resolve_answer(False, timeout=False)
+            elif self.game.state == "FEEDBACK":
+                self._finish_feedback()
+            else:
+                self.game.update(0.2)
         self.assertEqual(self.game.state, "INFINITE_RESULTS")
-        self.assertLess(steps, 2000)
-        self.assertIn(self.main.INFINITE_SAVE_KEY, self.game.progress.infinite_best_seconds)
+        self.assertLess(steps, 200)
+        self.assertEqual(self.game.infinite_final_score, 1)
+        self.assertEqual(self.game.progress.infinite_best_score[self.main.INFINITE_SAVE_KEY], 1)
+
+    def test_exiting_infinite_mode_saves_the_correct_count_as_the_score(self):
+        self._run_until("LEVEL_COMPLETE", max_steps=500, answer_correct=True)
+        self.game.start_infinite()
+        self._reveal_papers()
+        self.game.resolve_answer(True, timeout=False)
+        self._finish_feedback()
+        correct_so_far = self.game.infinite_correct
+        self.assertGreater(correct_so_far, 0)
+        self.game._pause()
+        self.game._exit_level()
+        self.assertEqual(self.game.state, "LEVEL_SELECT")
+        self.assertEqual(self.game.progress.infinite_best_score[self.main.INFINITE_SAVE_KEY], correct_so_far)
+
+    def test_credits_page_opens_and_draws(self):
+        self.game._open_credits()
+        self.assertEqual(self.game.state, "CREDITS")
+        self.game.layout_buttons()
+        self.game.draw(self.canvas)
+        self.game._go_menu()
+        self.assertEqual(self.game.state, "MENU")
+
+    def test_intro_screen_holds_then_settles_into_the_menu(self):
+        game = self.main.Game()
+        self.assertEqual(game.state, "INTRO")
+        game.layout_buttons()
+        self.assertEqual(game.buttons, [])
+        game.draw(self.canvas)
+        game.update(self.main.INTRO_HOLD_SECONDS - 0.1)
+        self.assertEqual(game.state, "INTRO")
+        game.draw(self.canvas)
+        game.update(self.main.INTRO_HOLD_SECONDS + self.main.INTRO_MOVE_SECONDS)
+        self.assertEqual(game.state, "MENU")
+
+    def test_gavel_sfx_plays_on_the_last_chef_frame_not_the_first(self):
+        played = []
+        self.game.audio.play_sfx = lambda name: played.append(name)
+        self.game.start_gavel("MENU")
+        self.assertNotIn("knife_hit", played)
+        self.game.update(self.main.GAVEL_DURATION * 0.99)
+        self.assertIn("knife_hit", played)
+        self.assertEqual(played.count("knife_hit"), 1)
 
     def test_infinite_mode_heals_and_grows_the_paper_count(self):
         self._run_until("LEVEL_COMPLETE", max_steps=500, answer_correct=True)

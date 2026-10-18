@@ -33,6 +33,9 @@ SFX_FILES = {
 DEFAULT_VOLUME = 0.7
 # The music files are mastered loud, so the slider's 100% plays at half volume.
 MUSIC_GAIN = 0.5
+# Switching tracks fades the old one out, then fades the new one in.
+MUSIC_FADE_SECONDS = 2.0
+MUSIC_FADE_MS = int(MUSIC_FADE_SECONDS * 1000)
 
 
 def clamp_volume(value: float) -> float:
@@ -44,6 +47,11 @@ class AudioManager:
         self.music_volume = clamp_volume(music_volume)
         self.sfx_volume = clamp_volume(sfx_volume)
         self.current_track: str | None = None
+        # While fading out the previous track, the next one waits here until
+        # the fade finishes, then starts with its own fade-in.
+        self.pending_track: str | None = None
+        self.fading_out = False
+        self.fade_timer = 0.0
         self.sounds: dict[str, pygame.mixer.Sound] = {}
         self.enabled = self._init_mixer()
         if self.enabled:
@@ -70,8 +78,39 @@ class AudioManager:
         sound.play()
 
     def play_music(self, track: str) -> None:
-        """Loop a named track; calling again with the playing track is a no-op."""
-        if track == self.current_track or not self.enabled:
+        """Switch tracks with a fade-out/fade-in; repeat calls are a no-op."""
+        if not self.enabled or track not in MUSIC_FILES:
+            return
+        if track == self.current_track and not self.fading_out:
+            return
+        if track == self.pending_track:
+            return
+        if self.current_track is None:
+            self.pending_track = track
+            self._start_pending()
+            return
+        self.pending_track = track
+        if not self.fading_out:
+            try:
+                pygame.mixer.music.fadeout(MUSIC_FADE_MS)
+            except pygame.error:
+                pass
+            self.fading_out = True
+            self.fade_timer = MUSIC_FADE_SECONDS
+
+    def update(self, dt: float) -> None:
+        """Advance the fade-out timer; call once per frame."""
+        if not self.fading_out:
+            return
+        self.fade_timer -= dt
+        if self.fade_timer <= 0:
+            self.fading_out = False
+            self._start_pending()
+
+    def _start_pending(self) -> None:
+        track = self.pending_track
+        self.pending_track = None
+        if track is None:
             return
         filename = MUSIC_FILES.get(track)
         if filename is None:
@@ -79,7 +118,7 @@ class AudioManager:
         try:
             pygame.mixer.music.load(str(MUSIC_DIR / filename))
             pygame.mixer.music.set_volume(self.music_volume * MUSIC_GAIN)
-            pygame.mixer.music.play(loops=-1)
+            pygame.mixer.music.play(loops=-1, fade_ms=MUSIC_FADE_MS)
         except (pygame.error, FileNotFoundError):
             return
         self.current_track = track
@@ -88,6 +127,8 @@ class AudioManager:
         if self.enabled:
             pygame.mixer.music.stop()
         self.current_track = None
+        self.pending_track = None
+        self.fading_out = False
 
     def set_music_volume(self, volume: float) -> None:
         self.music_volume = clamp_volume(volume)

@@ -83,15 +83,20 @@ ENEMY_SHEETS = {
 # cover about the same area as the peeler.
 ENEMY_DRAW_WIDTHS = {"Knife": 520, "Boiling Pot": 300}
 SETTINGS_PAPER_RECT = pygame.Rect(450, 50, 380, 600)
-SETTINGS_RESET_RECT = pygame.Rect(475, 606, 110, 24)
+SETTINGS_RESET_RECT = pygame.Rect(472, 604, 150, 28)  # fits "Reset Progress" at the small paper font
 DEV_INPUT_RECT = pygame.Rect(500, 494, 280, 34)
 DEV_SWITCH_RECT = pygame.Rect(700, 540, 64, 30)
 DEV_PASSWORD = "dev67"
 HOVER_SCALE = 1.05
-MENU_PAPER_RECT = pygame.Rect(460, 90, 360, 490)
+MENU_PAPER_RECT = pygame.Rect(460, 90, 360, 546)
 MENU_PAPER_TILT = -3
 MENU_LINK_TOP = 296
 MENU_LINK_STEP = 56
+MENU_ENTER_RECT = pygame.Rect(510, 536, 260, 64)
+# Startup animation: hold the big centered logo, then slide/shrink it into
+# its menu spot while the menu panel fades in underneath it.
+INTRO_HOLD_SECONDS = 2.0
+INTRO_MOVE_SECONDS = 0.6
 SETTINGS_ROW_RECTS = [pygame.Rect(500, 330, 280, 50), pygame.Rect(500, 410, 280, 50)]
 # Slider track per settings row: the label sits above, the track below it.
 SETTINGS_SLIDER_RECTS = [pygame.Rect(r.left + 10, r.bottom - 12, r.width - 20, 8) for r in SETTINGS_ROW_RECTS]
@@ -137,14 +142,23 @@ def scale_square(img: pygame.Surface, size: int) -> pygame.Surface:
     return pygame.transform.smoothscale(img, (size, size))
 
 
-def cover_scale(img: pygame.Surface, size: tuple[int, int]) -> pygame.Surface:
-    """Scale to fill `size` keeping the aspect ratio, cropping the overflow evenly."""
+def cover_scale(img: pygame.Surface, size: tuple[int, int], anchor: str = "center") -> pygame.Surface:
+    """Scale to fill `size` keeping the aspect ratio, cropping the overflow.
+
+    `anchor="top"` keeps the top of the source image at the top of the
+    result (any overflow is cropped off the bottom) instead of centering
+    the crop; the image isn't squished either way.
+    """
     scale = max(size[0] / img.get_width(), size[1] / img.get_height())
     scaled = pygame.transform.smoothscale(
         img, (max(size[0], round(img.get_width() * scale)), max(size[1], round(img.get_height() * scale)))
     )
     crop = pygame.Rect(0, 0, *size)
-    crop.center = scaled.get_rect().center
+    if anchor == "top":
+        crop.centerx = scaled.get_rect().centerx
+        crop.top = 0
+    else:
+        crop.center = scaled.get_rect().center
     return scaled.subsurface(crop).copy()
 
 
@@ -260,14 +274,40 @@ def draw_icon(surf: pygame.Surface, name: str, center: tuple[int, int], size: in
         pygame.draw.rect(surf, color, right, w, border_radius=2)
 
 
-def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(60, 34, 20), width=1) -> None:
+def outlined_text_surface(font, text, fill=(255, 255, 255), outline=(60, 34, 20), width=1) -> pygame.Surface:
     base = font.render(text, True, outline)
-    rect = base.get_rect(center=center)
+    pad = width
+    size = (base.get_width() + pad * 2, base.get_height() + pad * 2)
+    image = pygame.Surface(size, pygame.SRCALPHA)
+    rect = base.get_rect(center=(size[0] // 2, size[1] // 2))
     for dx in range(-width, width + 1):
         for dy in range(-width, width + 1):
             if dx * dx + dy * dy <= width * width:
-                surf.blit(base, rect.move(dx, dy))
-    surf.blit(font.render(text, True, fill), rect)
+                image.blit(base, rect.move(dx, dy))
+    image.blit(font.render(text, True, fill), rect)
+    return image
+
+
+def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(60, 34, 20), width=1) -> None:
+    label = outlined_text_surface(font, text, fill, outline, width)
+    surf.blit(label, label.get_rect(center=center))
+
+
+def draw_checklist_item(surf, rect: pygame.Rect, label: str, font, bold_font, hovered: bool = False) -> None:
+    """Notebook checklist item: text sits on the ruled line, which runs to
+    the paper's right margin. Hover bolds the text and ticks the box."""
+    hover = hovered and bold_font is not None
+    text_font = bold_font if hover else font
+    baseline = rect.bottom - 4
+    box = pygame.Rect(rect.left, 0, 22, 22)
+    box.bottom = baseline - 4
+    pygame.draw.rect(surf, (90, 70, 50), box, 2, border_radius=3)
+    if hover:
+        draw_icon(surf, "check", (box.centerx + 2, box.centery - 1), 20, (90, 70, 50))
+    text_label = text_font.render(label, True, (90, 70, 50))
+    pos = text_label.get_rect(left=box.right + 14, top=baseline - text_font.get_ascent())
+    surf.blit(text_label, pos)
+    pygame.draw.line(surf, (110, 90, 70), (pos.left, baseline + 2), (rect.right, baseline + 2), 2)
 
 
 def draw_paper(surf: pygame.Surface, rect: pygame.Rect, tilt: float = -2.5) -> None:
@@ -341,26 +381,21 @@ class Button:
         grown.center = self.rect.center
         return grown
 
+    def _scale_to(self, image: pygame.Surface, scale: float) -> pygame.Surface:
+        if scale == 1.0:
+            return image
+        return pygame.transform.smoothscale(
+            image, (max(1, round(image.get_width() * scale)), max(1, round(image.get_height() * scale)))
+        )
+
     def draw(self, surf: pygame.Surface, font: pygame.font.Font, bold_font: pygame.font.Font | None = None) -> None:
         if self.style == "hidden":
             return
         if self.style == "link":
-            # Notebook checklist item: the text sits on the ruled line, which
-            # runs to the paper's right margin. Hover bolds it and ticks the box.
-            hover = self.hovered and bold_font is not None
-            text_font = bold_font if hover else font
-            baseline = self.rect.bottom - 4
-            box = pygame.Rect(self.rect.left, 0, 22, 22)
-            box.bottom = baseline - 4
-            pygame.draw.rect(surf, (90, 70, 50), box, 2, border_radius=3)
-            if hover:
-                draw_icon(surf, "check", (box.centerx + 2, box.centery - 1), 20, (0, 0, 0))
-            label = text_font.render(self.label, True, (90, 70, 50))
-            pos = label.get_rect(left=box.right + 14, top=baseline - text_font.get_ascent())
-            surf.blit(label, pos)
-            pygame.draw.line(surf, (110, 90, 70), (pos.left, baseline + 2), (self.rect.right, baseline + 2), 2)
+            draw_checklist_item(surf, self.rect, self.label, font, bold_font, self.hovered)
             return
         rect = self._draw_rect()
+        scale = HOVER_SCALE if (self.hovered and self.enabled) else 1.0
         if self.style == "icon":
             r = rect.width // 2
             pygame.draw.circle(surf, (120, 60, 25), (rect.centerx + 2, rect.centery + 4), r)
@@ -368,20 +403,24 @@ class Button:
             pygame.draw.circle(surf, (245, 225, 200), rect.center, r - 5, 3)
             draw_icon(surf, self.icon, rect.center, round(r * 1.0), (255, 250, 240))
             if self.label:
-                draw_outlined_text(surf, font, self.label, (rect.centerx, rect.bottom + 18), width=2)
+                label = self._scale_to(outlined_text_surface(font, self.label, width=2), scale)
+                surf.blit(label, label.get_rect(center=(rect.centerx, rect.bottom + 18)))
             return
         if self.image is not None:
             image = pygame.transform.smoothscale(self.image, rect.size)
             if not self.enabled:
                 image.fill((140, 140, 140), special_flags=pygame.BLEND_RGB_MULT)
             surf.blit(image, rect)
-            draw_outlined_text(surf, font, self.label, rect.center, fill=TEXT_DARK, outline=PAPER_FILL, width=2)
+            label = self._scale_to(
+                outlined_text_surface(font, self.label, fill=TEXT_DARK, outline=PAPER_FILL, width=2), scale
+            )
+            surf.blit(label, label.get_rect(center=rect.center))
             return
         fill = (self.fill or BUTTON_FILL) if self.enabled else (150, 130, 110)
         border = (self.border or BUTTON_BORDER) if self.enabled else (110, 95, 80)
         pygame.draw.rect(surf, fill, rect, border_radius=self.radius)
         pygame.draw.rect(surf, border, rect, width=3 if rect.height > 30 else 2, border_radius=self.radius)
-        label = font.render(self.label, True, BUTTON_TEXT)
+        label = self._scale_to(font.render(self.label, True, BUTTON_TEXT), scale)
         surf.blit(label, label.get_rect(center=rect.center))
 
 
@@ -498,7 +537,7 @@ class Game:
         self.dev_input_active = False
         self.dev_error = False
 
-        self.state = "MENU"
+        self.state = "INTRO"
         self.level = 1
         self.infinite = False
         self.health = game_rules.HEALTH_MAX
@@ -529,10 +568,11 @@ class Game:
         self.toasts: list[list] = []
         self.gavel_timer = 0.0
         self.gavel_target = "MENU"
-        self.infinite_start_ms = 0
-        self.infinite_survived = 0.0
+        self.gavel_sfx_played = False
+        self.infinite_final_score = 0
         self.infinite_is_best = False
         self.dialogue_phase = "DONE"
+        self.intro_timer = 0.0
         self.dialogue_timer = 0.0
 
     # -- asset loading ---------------------------------------------------
@@ -547,7 +587,8 @@ class Game:
             for name in ("bread", "lettuce", "cheese", "bacon")
         ]
         self.bg_faded = cover_scale(
-            load_image("background_faded.png", (VIRTUAL_W, VIRTUAL_H), (90, 60, 40)), (VIRTUAL_W, VIRTUAL_H)
+            load_image("background_faded.png", (VIRTUAL_W, VIRTUAL_H), (90, 60, 40)), (VIRTUAL_W, VIRTUAL_H),
+            anchor="top",
         )
         self.logo = load_image("LOGO_food_court.png", (600, 460), (214, 122, 54))
         self.logo_small = pygame.transform.smoothscale(
@@ -691,7 +732,6 @@ class Game:
         self.infinite = True
         self.phase = "ROUND"
         self.fallacy_ids = self._infinite_fallacy_ids()
-        self.infinite_start_ms = pygame.time.get_ticks()
         self.next_question()
 
     def _dictionary_ids(self) -> set[int]:
@@ -902,16 +942,19 @@ class Game:
 
         self.next_question()
 
+    def _gavel_frame_index(self) -> int:
+        progress = 1 - max(0.0, self.gavel_timer) / GAVEL_DURATION
+        return min(len(self.chef_frames) - 1, int(progress * len(self.chef_frames)))
+
     def start_gavel(self, target: str) -> None:
         self.gavel_target = target
         self.gavel_timer = GAVEL_DURATION
+        self.gavel_sfx_played = False
         self.state = "GAVEL"
-        self.audio.play_sfx("knife_hit")
 
     def finish_infinite(self) -> None:
-        survived = (pygame.time.get_ticks() - self.infinite_start_ms) / 1000.0
-        self.infinite_survived = survived
-        self.infinite_is_best = self.progress.record_infinite_result(INFINITE_SAVE_KEY, survived)
+        self.infinite_final_score = self.infinite_correct
+        self.infinite_is_best = self.progress.record_infinite_score(INFINITE_SAVE_KEY, self.infinite_correct)
         self.start_gavel("INFINITE_RESULTS")
 
     def reset_game(self) -> None:
@@ -939,8 +982,7 @@ class Game:
         self.papers = []
         self.review_fallacy_id = None
         if self.infinite:
-            survived = (pygame.time.get_ticks() - self.infinite_start_ms) / 1000.0
-            self.progress.record_infinite_result(INFINITE_SAVE_KEY, survived)
+            self.progress.record_infinite_score(INFINITE_SAVE_KEY, self.infinite_correct)
         self.state = "LEVEL_SELECT"
 
     # -- update ---------------------------------------------------
@@ -955,6 +997,11 @@ class Game:
         track = self._desired_music()
         if track is not None:
             self.audio.play_music(track)
+        self.audio.update(dt)
+        if self.state == "INTRO":
+            self.intro_timer += dt
+            if self.intro_timer >= INTRO_HOLD_SECONDS + INTRO_MOVE_SECONDS:
+                self.state = "MENU"
         if self.paused:
             return
         if self.state == "GAMEPLAY" and not self.answered:
@@ -978,6 +1025,9 @@ class Game:
                     self.after_feedback()
         elif self.state == "GAVEL":
             self.gavel_timer -= dt
+            if not self.gavel_sfx_played and self._gavel_frame_index() >= len(self.chef_frames) - 1:
+                self.gavel_sfx_played = True
+                self.audio.play_sfx("knife_hit")
             if self.gavel_timer <= 0:
                 self.state = self.gavel_target
 
@@ -1048,13 +1098,14 @@ class Game:
         if self.state == "MENU":
             for i, (label, action) in enumerate((("Instructions", self._open_how_to_play),
                                                  ("Dictionary", self._open_dictionary),
-                                                 ("Settings", self._open_settings))):
+                                                 ("Settings", self._open_settings),
+                                                 ("Information", self._open_credits))):
                 top = MENU_LINK_TOP + i * MENU_LINK_STEP
                 right = menu_line_right(top + MENU_LINK_STEP)
                 self.buttons.append(Button(pygame.Rect(510, top, right - 510, MENU_LINK_STEP), label, action,
                                            style="link"))
-            self.buttons.append(Button(pygame.Rect(510, 480, 260, 64), "Enter", self._open_level_select))
-        elif self.state == "HOW_TO_PLAY":
+            self.buttons.append(Button(MENU_ENTER_RECT, "Enter", self._open_level_select))
+        elif self.state in ("HOW_TO_PLAY", "CREDITS"):
             self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._go_menu, style="icon", icon="return"))
         elif self.state == "LEVEL_SELECT":
             self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._go_menu, style="icon", icon="return"))
@@ -1303,6 +1354,23 @@ class Game:
     def _open_how_to_play(self) -> None:
         self.state = "HOW_TO_PLAY"
 
+    def _open_credits(self) -> None:
+        self.state = "CREDITS"
+
+    def _menu_logo_rect(self, width: int, center: tuple[int, int] | None = None) -> pygame.Rect:
+        height = round(width * self.logo.get_height() / self.logo.get_width())
+        rect = pygame.Rect(0, 0, width, height)
+        if center is not None:
+            rect.center = center
+        else:
+            rect.midtop = (MENU_PAPER_RECT.centerx, 30)
+        return rect
+
+    def _menu_tomato_rect(self) -> pygame.Rect:
+        rect = pygame.Rect(0, 0, 64, 64)
+        rect.bottomright = (MENU_ENTER_RECT.left + 290, MENU_ENTER_RECT.top + 20)
+        return rect
+
     def _open_level_select(self) -> None:
         self.state = "LEVEL_SELECT"
 
@@ -1348,17 +1416,21 @@ class Game:
             self._draw_ui_buttons(surf)
             return
 
-        faded_states = ("MENU", "HOW_TO_PLAY", "LEVEL_SELECT", "SETTINGS",
+        faded_states = ("INTRO", "MENU", "HOW_TO_PLAY", "CREDITS", "LEVEL_SELECT", "SETTINGS",
                         "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS")
         surf.blit(self.bg_faded if self.state in faded_states else self.bg, (0, 0))
         if self.state in ("LEVEL_SELECT", "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
             logo = self.logo_small_faded if self.state == "LEVEL_SELECT" else self.logo_small
             surf.blit(logo, logo.get_rect(bottomright=(VIRTUAL_W - 24, VIRTUAL_H - 16)))
 
-        if self.state == "MENU":
+        if self.state == "INTRO":
+            self._draw_intro(surf)
+        elif self.state == "MENU":
             self._draw_menu(surf)
         elif self.state == "HOW_TO_PLAY":
             self._draw_how_to_play(surf)
+        elif self.state == "CREDITS":
+            self._draw_credits(surf)
         elif self.state == "LEVEL_SELECT":
             self._draw_level_select(surf)
         elif self.state == "SETTINGS":
@@ -1387,8 +1459,8 @@ class Game:
 
         if self.state == "MENU" and not self.paused:
             # The little tomato sits in front of the checklist and Enter button.
-            tomato = pygame.transform.smoothscale(self.tomato_frames[0], (64, 64))
-            surf.blit(tomato, tomato.get_rect(bottomright=(800, 500)))
+            tomato = pygame.transform.smoothscale(self.tomato_frames[0], self._menu_tomato_rect().size)
+            surf.blit(tomato, self._menu_tomato_rect())
 
     def _is_hovered(self, rect: pygame.Rect) -> bool:
         return rect.collidepoint(self.mouse_pos)
@@ -1454,12 +1526,60 @@ class Game:
         surf.blit(label, label.get_rect(center=(PAUSE_POPUP_RECT.centerx, PAUSE_POPUP_RECT.top + 62)))
 
     def _draw_menu(self, surf: pygame.Surface) -> None:
-        paper = MENU_PAPER_RECT
-        draw_paper(surf, paper, tilt=MENU_PAPER_TILT)
-        logo = pygame.transform.smoothscale(
-            self.logo, (300, int(300 * self.logo.get_height() / self.logo.get_width()))
-        )
-        surf.blit(logo, logo.get_rect(midtop=(paper.centerx, 30)))
+        draw_paper(surf, MENU_PAPER_RECT, tilt=MENU_PAPER_TILT)
+        logo_rect = self._menu_logo_rect(300)
+        surf.blit(pygame.transform.smoothscale(self.logo, logo_rect.size), logo_rect)
+
+    def _draw_menu_panel(self, surf: pygame.Surface) -> None:
+        """The paper, checklist, Enter button and tomato -- everything the
+        intro's menu fade-in reveals underneath the animating logo."""
+        draw_paper(surf, MENU_PAPER_RECT, tilt=MENU_PAPER_TILT)
+        for i, label in enumerate(("Instructions", "Dictionary", "Settings", "Information")):
+            top = MENU_LINK_TOP + i * MENU_LINK_STEP
+            right = menu_line_right(top + MENU_LINK_STEP)
+            draw_checklist_item(surf, pygame.Rect(510, top, right - 510, MENU_LINK_STEP), label,
+                                self.fonts["large"], self.fonts["large_bold"], hovered=False)
+        Button(MENU_ENTER_RECT, "Enter", self._noop).draw(surf, self.fonts["title_bold"])
+        tomato = pygame.transform.smoothscale(self.tomato_frames[0], self._menu_tomato_rect().size)
+        surf.blit(tomato, self._menu_tomato_rect())
+
+    def _draw_intro(self, surf: pygame.Surface) -> None:
+        big_rect = self._menu_logo_rect(520, center=(VIRTUAL_W // 2, VIRTUAL_H // 2 - 40))
+        small_rect = self._menu_logo_rect(300)
+        if self.intro_timer < INTRO_HOLD_SECONDS:
+            logo_rect = big_rect
+            alpha = 0
+        else:
+            t = smoothstep((self.intro_timer - INTRO_HOLD_SECONDS) / INTRO_MOVE_SECONDS)
+            logo_rect = lerp_rect(big_rect, small_rect, t)
+            alpha = round(255 * t)
+        if alpha > 0:
+            panel = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
+            self._draw_menu_panel(panel)
+            panel.set_alpha(alpha)
+            surf.blit(panel, (0, 0))
+        surf.blit(pygame.transform.smoothscale(self.logo, logo_rect.size), logo_rect)
+
+    def _draw_credits(self, surf: pygame.Surface) -> None:
+        panel = pygame.Rect(240, 90, 800, 540)
+        draw_paper(surf, panel, tilt=-1.5)
+        title = self.fonts["title"].render("Information", True, TEXT_DARK)
+        surf.blit(title, title.get_rect(center=(panel.centerx, panel.top + 60)))
+
+        sections = [
+            ("Developers", "Lina, Sophii, Ryan, Kenzie"),
+            ("Audio", "Courtesy of the YouTube Studio Audio Library"),
+            ("", "A DubHacks 2026 project"),
+        ]
+        y = panel.top + 170
+        for heading, line in sections:
+            if heading:
+                head_label = self.fonts["body_bold"].render(heading, True, (40, 34, 28))
+                surf.blit(head_label, head_label.get_rect(center=(panel.centerx, y)))
+                y += self.fonts["body_bold"].get_height() + 4
+            label = self.fonts["body"].render(line, True, (40, 34, 28))
+            surf.blit(label, label.get_rect(center=(panel.centerx, y)))
+            y += self.fonts["body"].get_height() + 36
 
     def _draw_how_to_play(self, surf: pygame.Surface) -> None:
         panel = pygame.Rect(240, 90, 800, 540)
@@ -1489,8 +1609,8 @@ class Game:
 
     def _draw_level_select(self, surf: pygame.Surface) -> None:
         if self._infinite_available():
-            best = self.progress.infinite_best_seconds.get(INFINITE_SAVE_KEY, 0.0)
-            hint = f"Best run: {best:.1f}s" if best else "Review everything you've unlocked"
+            best = self.progress.infinite_best_score.get(INFINITE_SAVE_KEY, 0)
+            hint = f"Best: {best} correct" if best else "Review everything you've unlocked"
         else:
             hint = "Complete a level to unlock"
         draw_outlined_text(surf, self.fonts["small"], hint,
@@ -1699,9 +1819,7 @@ class Game:
         return self.banner_cache[key]
 
     def _draw_gavel(self, surf: pygame.Surface) -> None:
-        progress = 1 - max(0.0, self.gavel_timer) / GAVEL_DURATION
-        frame_idx = min(len(self.chef_frames) - 1, int(progress * len(self.chef_frames)))
-        chef = self.chef_frames[frame_idx]
+        chef = self.chef_frames[self._gavel_frame_index()]
         overlay = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
         overlay.fill((20, 12, 8, 140))
         surf.blit(overlay, (0, 0))
@@ -1739,10 +1857,10 @@ class Game:
         self._draw_white_card(surf, card)
         label = self.fonts["title_bold"].render("INFINITE MODE", True, BUTTON_BORDER)
         surf.blit(label, label.get_rect(center=(card.centerx, card.top + 62)))
-        survived = self.fonts["title"].render(f"{self.infinite_survived:.1f}s", True, TEXT_DARK)
-        surf.blit(survived, survived.get_rect(center=(card.centerx, card.top + 150)))
-        best = self.progress.infinite_best_seconds.get(INFINITE_SAVE_KEY, 0.0)
-        best_label = self.fonts["body"].render(f"Best: {best:.1f}s", True, TEXT_DARK)
+        score = self.fonts["title"].render(f"{self.infinite_final_score} correct", True, TEXT_DARK)
+        surf.blit(score, score.get_rect(center=(card.centerx, card.top + 150)))
+        best = self.progress.infinite_best_score.get(INFINITE_SAVE_KEY, 0)
+        best_label = self.fonts["body"].render(f"Best: {best} correct", True, TEXT_DARK)
         surf.blit(best_label, best_label.get_rect(center=(card.centerx, card.top + 210)))
         if self.infinite_is_best:
             new_best = self.fonts["body_bold"].render("New best!", True, CORRECT_COLOR)
