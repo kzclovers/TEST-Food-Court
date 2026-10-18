@@ -12,16 +12,19 @@ from dataclasses import dataclass, field
 # --- Tuning values -----------------------------------------------------
 
 HEALTH_MAX = 5
+OPPONENT_HEALTH_MAX = 5  # main levels: each correct answer removes one
 MASTERY_TARGET = 3  # correct answers needed to master a fallacy
 QUESTION_SECONDS = 10.0
 FEEDBACK_HOLD_SECONDS = 2.0
 
-# One correct answer plus this many decoys, per level.
-WRONG_OPTION_COUNTS = {1: 3, 2: 5, 3: 7}
+# One correct answer plus this many decoys, per level (grows with each enemy).
+WRONG_OPTION_COUNTS = {1: 3, 2: 3, 3: 5, 4: 5, 5: 7, 6: 7}
 
-# Number of questions answered between introducing each new fallacy, so
-# the level's fallacies are taught gradually rather than all at once.
-TEACHING_INTERVAL = 2
+# Infinite mode: total answer papers start at 4 and grow by one every
+# INFINITE_CORRECT_PER_OPTION correct answers, up to INFINITE_MAX_OPTIONS.
+INFINITE_START_OPTIONS = 4
+INFINITE_MAX_OPTIONS = 8
+INFINITE_CORRECT_PER_OPTION = 2
 
 # Infinite mode: each question's timer is multiplied by this factor,
 # bottoming out at MIN_INFINITE_SECONDS.
@@ -35,6 +38,12 @@ MISS_WEIGHT_BONUS = 1.5
 
 def wrong_option_count(level: int) -> int:
     return WRONG_OPTION_COUNTS.get(level, WRONG_OPTION_COUNTS[max(WRONG_OPTION_COUNTS)])
+
+
+def infinite_option_count(correct_answers: int) -> int:
+    """Total answer papers (correct + decoys) in infinite mode."""
+    grown = INFINITE_START_OPTIONS + correct_answers // INFINITE_CORRECT_PER_OPTION
+    return min(INFINITE_MAX_OPTIONS, grown)
 
 
 @dataclass

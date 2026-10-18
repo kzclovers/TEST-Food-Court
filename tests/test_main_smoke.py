@@ -45,7 +45,9 @@ class GameSmokeTests(unittest.TestCase):
         progress_module.DESKTOP_SAVE_PATH = self._original_path
         self._tmpdir.cleanup()
 
-    def _run_until(self, target_state, max_steps, answer_correct):
+    def _run_until(self, target_state, max_steps, answer_correct, level=1):
+        """Warm-up questions are always answered correctly (misses there just
+        repeat forever); `answer_correct` applies to the official round."""
         steps = 0
         while self.game.state != target_state and steps < max_steps:
             steps += 1
@@ -53,13 +55,12 @@ class GameSmokeTests(unittest.TestCase):
             if state == "MENU":
                 self.game._open_level_select()
             elif state == "LEVEL_SELECT":
-                self.game._select_level(1)
-            elif state == "INTRO":
-                self.game.on_continue()
+                self.game._select_level(level)
             elif state == "TEACHING":
                 self.game.on_add_to_dictionary()
             elif state == "GAMEPLAY":
-                self.game.resolve_answer(answer_correct, timeout=False)
+                warmup = self.game.phase == "WARMUP" and not self.game.infinite
+                self.game.resolve_answer(True if warmup else answer_correct, timeout=False)
             elif state == "FEEDBACK":
                 if self.game.review_fallacy_id is not None:
                     self.game.handle_click((640, 400))
@@ -71,18 +72,179 @@ class GameSmokeTests(unittest.TestCase):
             self.game.draw(self.canvas)
         return steps
 
+    def _start_level_one_round(self):
+        """Select Level 1, collect its three cards, and stop at the first question."""
+        self.game._open_level_select()
+        self.game._select_level(1)
+        for _ in range(3):
+            self.game.on_add_to_dictionary()
+
+    def _reveal_papers(self):
+        self.game.update(self.main.DIALOGUE_CENTER_SECONDS + 0.01)
+        self.game.update(self.main.DIALOGUE_MOVE_SECONDS + 0.01)
+
+    def _finish_feedback(self):
+        if self.game.review_fallacy_id is not None:
+            self.game.layout_buttons()
+            self.game.handle_click((640, 400))
+            self.game.layout_buttons()
+            self.game.handle_click((640, 400))
+        else:
+            self.game.update(game_rules_hold())
+
+    # -- level structure ---------------------------------------------------
+
     def test_answering_correctly_completes_the_level(self):
         steps = self._run_until("LEVEL_COMPLETE", max_steps=500, answer_correct=True)
         self.assertEqual(self.game.state, "LEVEL_COMPLETE")
         self.assertLess(steps, 500)
-        self.assertEqual(len(self.game.progress.dictionary_ids), 6)
-        self.assertEqual(len(self.game.progress.mastered_ids), 6)
+        self.assertEqual(self.game.progress.dictionary_ids, {1, 2, 3})
+        self.assertEqual(self.game.enemy_health, 0)
+        self.assertEqual(self.game.health, 5)
+        self.assertIn(1, self.game.progress.completed_levels)
 
     def test_answering_incorrectly_fails_the_level(self):
         steps = self._run_until("LEVEL_FAILED", max_steps=500, answer_correct=False)
         self.assertEqual(self.game.state, "LEVEL_FAILED")
         self.assertLess(steps, 500)
         self.assertEqual(self.game.health, 0)
+        self.assertEqual(self.game.enemy_health, 5)
+
+    def test_all_three_cards_are_introduced_together(self):
+        self.game._open_level_select()
+        self.game._select_level(1)
+        self.assertEqual(self.game.state, "TEACHING")
+        self.assertEqual(self.game.teaching_ids, [1, 2, 3])
+        self.game.layout_buttons()
+        self.game.draw(self.canvas)
+
+        self.game.on_add_to_dictionary(2)
+        self.assertEqual(self.game.state, "TEACHING")
+        self.assertEqual(self.game.progress.dictionary_ids, {2})
+        self.game.draw(self.canvas)
+
+        self.game.on_add_to_dictionary(1)
+        self.game.on_add_to_dictionary(3)
+        self.assertEqual(self.game.state, "GAMEPLAY")
+        self.assertEqual(self.game.phase, "WARMUP")
+        self.assertEqual(sorted(self.game.warmup_queue), [1, 2, 3])
+
+    def test_warmup_misses_cost_nothing_and_repeat_the_same_fallacy(self):
+        self._start_level_one_round()
+        self._reveal_papers()
+        first = self.game.current_fallacy_id
+
+        self.game.resolve_answer(False, timeout=False)
+        self.assertEqual(self.game.health, 5)
+        self._finish_feedback()
+        self.assertEqual(self.game.current_fallacy_id, first)
+        self.assertEqual(self.game.phase, "WARMUP")
+
+        asked = [first]
+        self.game.resolve_answer(True, timeout=False)
+        self._finish_feedback()
+        for _ in range(2):
+            asked.append(self.game.current_fallacy_id)
+            self.game.resolve_answer(True, timeout=False)
+            self._finish_feedback()
+        self.assertEqual(sorted(asked), [1, 2, 3])
+        self.assertEqual(self.game.phase, "ROUND")
+        self.assertEqual(self.game.enemy_health, 5)
+
+    def test_official_round_damages_both_sides_without_healing(self):
+        self._start_level_one_round()
+        for _ in range(3):
+            self.game.resolve_answer(True, timeout=False)
+            self._finish_feedback()
+        self.assertEqual(self.game.phase, "ROUND")
+
+        self.game.resolve_answer(False, timeout=False)
+        self._finish_feedback()
+        self.assertEqual(self.game.health, 4)
+
+        self.game.resolve_answer(True, timeout=False)
+        self._finish_feedback()
+        self.assertEqual(self.game.health, 4)
+        self.assertEqual(self.game.enemy_health, 4)
+
+    def test_official_round_only_asks_unlocked_fallacies(self):
+        self.game.progress.completed_levels.add(1)
+        self.game.progress.dictionary_ids.update({1, 2, 3, 4, 5, 6, 7})
+        self.game._open_level_select()
+        self.game._select_level(2)
+        for _ in range(3):
+            self.game.on_add_to_dictionary()
+        self.game.phase = "ROUND"
+        self.assertEqual(self.game._quizzable_ids(), [1, 2, 3, 4, 5, 6])
+
+    def test_levels_unlock_in_order(self):
+        self.game._open_level_select()
+        self.game._select_level(2)
+        self.assertEqual(self.game.state, "LEVEL_SELECT")
+        self._run_until("LEVEL_COMPLETE", max_steps=500, answer_correct=True)
+        self.game._next_level()
+        self.assertEqual(self.game.state, "TEACHING")
+        self.assertEqual(self.game.level, 2)
+        self.assertEqual(self.game.enemy_name, "Vegetable Peeler")
+
+    def test_later_levels_use_their_own_enemy(self):
+        self.game.progress.completed_levels.update({1, 2, 3, 4})
+        self.game._open_level_select()
+        self.game._select_level(5)
+        self.assertEqual(self.game.enemy_name, "Boiling Pot")
+        self.assertEqual(self.game.teaching_ids, [13, 14, 15])
+        for _ in range(3):
+            self.game.on_add_to_dictionary()
+        self._reveal_papers()
+        self.assertEqual(len(self.game.papers), 8)
+        self.game.draw(self.canvas)
+
+    # -- pause ---------------------------------------------------
+
+    def test_pause_freezes_the_question_timer(self):
+        self._start_level_one_round()
+        self._reveal_papers()
+        self.game.layout_buttons()
+        self.game.handle_click(self.main.PAUSE_BUTTON_RECT.center)
+        self.assertTrue(self.game.paused)
+        before = self.game.timer
+        self.game.update(5.0)
+        self.assertEqual(self.game.timer, before)
+        self.game.draw(self.canvas)
+
+        self.game.layout_buttons()
+        continue_button = next(b for b in self.game.buttons if b.label == "Continue")
+        self.game.handle_click(continue_button.rect.center)
+        self.assertFalse(self.game.paused)
+
+    def test_exiting_a_main_level_shows_level_failed(self):
+        self._start_level_one_round()
+        self.game._pause()
+        self.game._exit_level()
+        self.assertEqual(self.game.state, "LEVEL_FAILED")
+        self.assertNotIn(1, self.game.progress.completed_levels)
+        self.game.layout_buttons()
+        self.game.draw(self.canvas)
+
+    def test_exiting_infinite_mode_skips_the_popup(self):
+        self._run_until("LEVEL_COMPLETE", max_steps=500, answer_correct=True)
+        self.game.start_infinite()
+        self.game._pause()
+        self.game._exit_level()
+        self.assertEqual(self.game.state, "LEVEL_SELECT")
+
+    # -- infinite mode ---------------------------------------------------
+
+    def test_infinite_mode_is_locked_until_a_level_is_completed(self):
+        self.game._open_level_select()
+        self.game.layout_buttons()
+        infinite = next(b for b in self.game.buttons if b.label == "Infinite Mode")
+        self.assertFalse(infinite.enabled)
+        self._run_until("LEVEL_COMPLETE", max_steps=500, answer_correct=True)
+        self.game._open_level_select()
+        self.game.layout_buttons()
+        infinite = next(b for b in self.game.buttons if b.label == "Infinite Mode")
+        self.assertTrue(infinite.enabled)
 
     def test_infinite_mode_ends_and_records_best_time(self):
         self._run_until("LEVEL_COMPLETE", max_steps=500, answer_correct=True)
@@ -90,7 +252,27 @@ class GameSmokeTests(unittest.TestCase):
         steps = self._run_until("INFINITE_RESULTS", max_steps=2000, answer_correct=False)
         self.assertEqual(self.game.state, "INFINITE_RESULTS")
         self.assertLess(steps, 2000)
-        self.assertIn(self.game.level, self.game.progress.infinite_best_seconds)
+        self.assertIn(self.main.INFINITE_SAVE_KEY, self.game.progress.infinite_best_seconds)
+
+    def test_infinite_mode_heals_and_grows_the_paper_count(self):
+        self._run_until("LEVEL_COMPLETE", max_steps=500, answer_correct=True)
+        self.game.start_infinite()
+        self.assertEqual(self.game.state, "GAMEPLAY")
+        self._reveal_papers()
+        self.assertEqual(len(self.game.papers), 4)
+        self.assertTrue(set(self.game.fallacy_ids) <= {1, 2, 3})
+
+        self.game.resolve_answer(False, timeout=False)
+        self._finish_feedback()
+        self.assertEqual(self.game.health, 4)
+        for _ in range(2):
+            self.game.resolve_answer(True, timeout=False)
+            self._finish_feedback()
+        self.assertEqual(self.game.health, 5)
+        self._reveal_papers()
+        self.assertEqual(len(self.game.papers), 5)
+
+    # -- menus and screens ---------------------------------------------------
 
     def test_dictionary_and_settings_overlays_do_not_crash(self):
         self._run_until("LEVEL_COMPLETE", max_steps=500, answer_correct=True)
@@ -119,14 +301,6 @@ class GameSmokeTests(unittest.TestCase):
     def test_game_starts_at_the_main_menu(self):
         self.assertEqual(self.game.state, "MENU")
 
-    def test_level_select_keeps_unauthored_levels_locked(self):
-        self.game._open_level_select()
-        self.assertEqual(self.game.state, "LEVEL_SELECT")
-        self.game._select_level(2)
-        self.assertEqual(self.game.state, "LEVEL_SELECT")
-        self.game._select_level(3)
-        self.assertEqual(self.game.state, "LEVEL_SELECT")
-
     def test_menu_navigation_round_trip(self):
         self.game._open_how_to_play()
         self.assertEqual(self.game.state, "HOW_TO_PLAY")
@@ -141,10 +315,7 @@ class GameSmokeTests(unittest.TestCase):
         self.assertEqual(self.game.state, "MENU")
 
     def test_dialogue_centers_then_moves_before_papers_appear(self):
-        self.game._open_level_select()
-        self.game._select_level(1)
-        self.game.on_continue()
-        self.game.on_add_to_dictionary()
+        self._start_level_one_round()
 
         self.assertEqual(self.game.state, "GAMEPLAY")
         self.assertEqual(self.game.dialogue_phase, "CENTER")
@@ -161,12 +332,8 @@ class GameSmokeTests(unittest.TestCase):
         self.assertAlmostEqual(self.game.timer, self.game.timer_max)
 
     def test_wrong_answer_pops_the_correct_flashcard(self):
-        self.game._open_level_select()
-        self.game._select_level(1)
-        self.game.on_continue()
-        self.game.on_add_to_dictionary()
-        self.game.update(self.main.DIALOGUE_CENTER_SECONDS + 0.01)
-        self.game.update(self.main.DIALOGUE_MOVE_SECONDS + 0.01)
+        self._start_level_one_round()
+        self._reveal_papers()
         fid = self.game.current_fallacy_id
         before = set(self.game.progress.dictionary_ids)
         self.game.resolve_answer(False, timeout=False)
@@ -178,35 +345,10 @@ class GameSmokeTests(unittest.TestCase):
         self.game.update(5)
         self.assertEqual(self.game.state, "FEEDBACK")
         self.assertEqual(self.game.review_fallacy_id, fid)
-        self.assertEqual(self.game.progress.dictionary_ids, before)
         self.game.layout_buttons()
         self.game.handle_click((640, 400))
         self.assertIsNone(self.game.review_fallacy_id)
         self.assertEqual(self.game.progress.dictionary_ids, before)
-
-    def test_dictionary_starts_empty_and_a_card_is_offered_every_two_rounds(self):
-        self.assertEqual(self.game.progress.dictionary_ids, set())
-        self.game._open_level_select()
-        self.game._select_level(1)
-        self.game.on_continue()
-        self.assertEqual(self.game.state, "GAMEPLAY")
-        self.assertEqual(self.game.progress.dictionary_ids, set())
-
-        played = self.game.current_fallacy_id
-        self.game.resolve_answer(True, timeout=False)
-        self.game.update(game_rules_hold())
-        self.assertEqual(self.game.state, "GAMEPLAY")
-        self.assertEqual(self.game.current_fallacy_id, played)
-
-        self.game.resolve_answer(True, timeout=False)
-        self.game.update(game_rules_hold())
-        self.assertEqual(self.game.state, "TEACHING")
-        self.assertEqual(self.game.teaching_fallacy_id, played)
-        self.assertEqual(self.game.progress.dictionary_ids, set())
-
-        self.game.on_add_to_dictionary()
-        self.assertEqual(self.game.progress.dictionary_ids, {played})
-        self.assertEqual(self.game.state, "GAMEPLAY")
 
     def test_leftover_dictionary_cards_sit_on_both_pages(self):
         self.game.progress.dictionary_ids.update({1, 2, 3, 4, 5, 6})
@@ -249,10 +391,7 @@ class GameSmokeTests(unittest.TestCase):
         self.game.draw(self.canvas)
 
     def test_clicking_during_dialogue_phase_is_ignored(self):
-        self.game._open_level_select()
-        self.game._select_level(1)
-        self.game.on_continue()
-        self.game.on_add_to_dictionary()
+        self._start_level_one_round()
         self.assertEqual(self.game.dialogue_phase, "CENTER")
 
         self.game.handle_click((640, 300))
