@@ -22,6 +22,7 @@ import game_rules
 from audio import AudioManager
 from game_data import FALLACIES, FALLACIES_BY_ID
 from game_rules import FallacySelector
+from entities.character import SpriteStrip
 from entities.chef import Chef
 from entities.peeler import Peeler
 from entities.tomato import Tomato
@@ -61,10 +62,13 @@ CHARACTER_SIZE = 230
 CHEF_SIZE = 400
 
 LEVEL_CIRCLE_RECTS = [
-    pygame.Rect(150, 300, 220, 220),
-    pygame.Rect(530, 300, 220, 220),
-    pygame.Rect(910, 300, 220, 220),
+    pygame.Rect(230, 240, 210, 210),
+    pygame.Rect(535, 240, 210, 210),
+    pygame.Rect(840, 240, 210, 210),
 ]
+RETURN_BUTTON_RECT = pygame.Rect(40, 28, 64, 64)
+SETTINGS_PAPER_RECT = pygame.Rect(450, 50, 380, 600)
+SETTINGS_ROW_RECTS = [pygame.Rect(500, 330, 280, 50), pygame.Rect(500, 410, 280, 50)]
 
 # Connected-component bounding boxes (x, y, w, h) of the five individual
 # carrot illustrations in carrot_heath_bar.png, widest/fullest first.
@@ -134,6 +138,103 @@ def lerp_rect(a: pygame.Rect, b: pygame.Rect, t: float) -> pygame.Rect:
     )
 
 
+def draw_icon(surf: pygame.Surface, name: str, center: tuple[int, int], size: int, color) -> None:
+    """Simple line icons in the mockups' style, drawn instead of image assets."""
+    cx, cy = center
+    s = size
+    w = max(2, s // 8)
+    if name == "home":
+        roof = [(cx - s * 0.55, cy - s * 0.02), (cx, cy - s * 0.5), (cx + s * 0.55, cy - s * 0.02)]
+        pygame.draw.lines(surf, color, False, roof, w)
+        body = pygame.Rect(0, 0, round(s * 0.75), round(s * 0.55))
+        body.midtop = (cx, round(cy - s * 0.12))
+        pygame.draw.rect(surf, color, body, w, border_radius=3)
+        door = pygame.Rect(0, 0, round(s * 0.22), round(s * 0.3))
+        door.midbottom = body.midbottom
+        pygame.draw.rect(surf, color, door, w)
+    elif name == "return":
+        r = round(s * 0.42)
+        rect = pygame.Rect(cx - r, cy - r, r * 2, r * 2)
+        pygame.draw.arc(surf, color, rect, math.radians(-200), math.radians(110), w)
+        tip = (cx - r * 0.35, cy - r)
+        pygame.draw.polygon(surf, color, [
+            (tip[0] - s * 0.18, tip[1]), (tip[0] + s * 0.08, tip[1] - s * 0.18), (tip[0] + s * 0.08, tip[1] + s * 0.18)
+        ])
+    elif name in ("next", "prev"):
+        d = 1 if name == "next" else -1
+        pygame.draw.line(surf, color, (cx - d * s * 0.4, cy), (cx + d * s * 0.35, cy), w)
+        pygame.draw.lines(surf, color, False, [
+            (cx + d * s * 0.05, cy - s * 0.32), (cx + d * s * 0.38, cy), (cx + d * s * 0.05, cy + s * 0.32)
+        ], w)
+    elif name == "lock":
+        body = pygame.Rect(0, 0, round(s * 0.8), round(s * 0.6))
+        body.midtop = (cx, round(cy - s * 0.05))
+        pygame.draw.rect(surf, color, body, w, border_radius=max(2, s // 10))
+        shackle = pygame.Rect(0, 0, round(s * 0.5), round(s * 0.6))
+        shackle.midbottom = (cx, body.top + w)
+        pygame.draw.arc(surf, color, shackle, 0, math.pi, w)
+        pygame.draw.line(surf, color, (shackle.left + w // 2, shackle.centery), (shackle.left + w // 2, body.top), w)
+        pygame.draw.line(surf, color, (shackle.right - w // 2 - 1, shackle.centery), (shackle.right - w // 2 - 1, body.top), w)
+    elif name == "check":
+        pygame.draw.lines(surf, color, False, [(cx - s * 0.4, cy), (cx - s * 0.1, cy + s * 0.3), (cx + s * 0.45, cy - s * 0.35)], w + 2)
+    elif name == "gear":
+        r = s * 0.3
+        for i in range(8):
+            a = i * math.pi / 4
+            pygame.draw.line(surf, color, (cx + math.cos(a) * r, cy + math.sin(a) * r),
+                             (cx + math.cos(a) * s * 0.48, cy + math.sin(a) * s * 0.48), w + 2)
+        pygame.draw.circle(surf, color, (cx, cy), round(r), w)
+    elif name == "book":
+        left = pygame.Rect(0, 0, round(s * 0.42), round(s * 0.7))
+        left.topright = (cx, round(cy - s * 0.35))
+        right = left.copy()
+        right.topleft = (cx, left.top)
+        pygame.draw.rect(surf, color, left, w, border_radius=2)
+        pygame.draw.rect(surf, color, right, w, border_radius=2)
+
+
+def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(60, 34, 20), width=3) -> None:
+    base = font.render(text, True, outline)
+    rect = base.get_rect(center=center)
+    for dx in range(-width, width + 1):
+        for dy in range(-width, width + 1):
+            if dx * dx + dy * dy <= width * width:
+                surf.blit(base, rect.move(dx, dy))
+    surf.blit(font.render(text, True, fill), rect)
+
+
+def draw_paper(surf: pygame.Surface, rect: pygame.Rect, tilt: float = -2.5) -> None:
+    """A slightly tilted cream sheet of paper with a soft shadow, as in the mockups."""
+    sheet = pygame.Surface(rect.size, pygame.SRCALPHA)
+    pygame.draw.rect(sheet, PAPER_FILL, sheet.get_rect(), border_radius=6)
+    inner = sheet.get_rect().inflate(-24, -24)
+    pygame.draw.rect(sheet, (205, 190, 165), inner, 1, border_radius=4)
+    shadow = pygame.Surface(rect.size, pygame.SRCALPHA)
+    pygame.draw.rect(shadow, (0, 0, 0, 90), shadow.get_rect(), border_radius=6)
+    shadow = pygame.transform.rotate(shadow, tilt)
+    sheet = pygame.transform.rotate(sheet, tilt)
+    surf.blit(shadow, shadow.get_rect(center=(rect.centerx + 8, rect.centery + 10)))
+    surf.blit(sheet, sheet.get_rect(center=rect.center))
+
+
+def circle_portrait(sprite: pygame.Surface, diameter: int, bg=(245, 242, 236), darken: bool = False) -> pygame.Surface:
+    portrait = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
+    pygame.draw.circle(portrait, bg, (diameter // 2, diameter // 2), diameter // 2)
+    scale = diameter * 1.05 / max(sprite.get_width(), sprite.get_height())
+    img = pygame.transform.smoothscale(
+        sprite, (max(1, round(sprite.get_width() * scale)), max(1, round(sprite.get_height() * scale)))
+    )
+    portrait.blit(img, img.get_rect(center=(diameter // 2, round(diameter * 0.58))))
+    if darken:
+        shade = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
+        shade.fill((40, 40, 40, 170))
+        portrait.blit(shade, (0, 0))
+    mask = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
+    pygame.draw.circle(mask, (255, 255, 255, 255), (diameter // 2, diameter // 2), diameter // 2)
+    portrait.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    return portrait
+
+
 def draw_sparkle(surf: pygame.Surface, center: tuple[int, int], size: int, color) -> None:
     """A small four-line asterisk/sparkle accent, as seen on teaching cards."""
     cx, cy = center
@@ -144,16 +245,43 @@ def draw_sparkle(surf: pygame.Surface, center: tuple[int, int], size: int, color
 
 
 class Button:
-    __slots__ = ("rect", "label", "action", "enabled", "radius")
+    """Styles: "pill" (rounded orange), "icon" (orange circle + vector icon,
+    label drawn underneath as a caption), "link" (checkbox + underlined text
+    on paper), "hidden" (hit area only; the screen draws the visuals)."""
 
-    def __init__(self, rect: pygame.Rect, label: str, action, enabled: bool = True, radius: int = 14):
+    __slots__ = ("rect", "label", "action", "enabled", "radius", "style", "icon")
+
+    def __init__(self, rect: pygame.Rect, label: str, action, enabled: bool = True, radius: int = 14,
+                 style: str = "pill", icon: str = ""):
         self.rect = rect
         self.label = label
         self.action = action
         self.enabled = enabled
         self.radius = radius
+        self.style = style
+        self.icon = icon
 
     def draw(self, surf: pygame.Surface, font: pygame.font.Font) -> None:
+        if self.style == "hidden":
+            return
+        if self.style == "icon":
+            r = self.rect.width // 2
+            pygame.draw.circle(surf, (120, 60, 25), (self.rect.centerx + 2, self.rect.centery + 4), r)
+            pygame.draw.circle(surf, BUTTON_FILL, self.rect.center, r)
+            pygame.draw.circle(surf, (245, 225, 200), self.rect.center, r - 5, 3)
+            draw_icon(surf, self.icon, self.rect.center, round(r * 1.0), (255, 250, 240))
+            if self.label:
+                draw_outlined_text(surf, font, self.label, (self.rect.centerx, self.rect.bottom + 18), width=2)
+            return
+        if self.style == "link":
+            box = pygame.Rect(self.rect.left, 0, 20, 20)
+            box.centery = self.rect.centery
+            pygame.draw.rect(surf, (90, 70, 50), box, 2, border_radius=3)
+            label = font.render(self.label, True, (90, 70, 50))
+            pos = label.get_rect(midleft=(box.right + 14, self.rect.centery))
+            surf.blit(label, pos)
+            pygame.draw.line(surf, (110, 90, 70), (pos.left, pos.bottom + 2), (self.rect.right, pos.bottom + 2), 2)
+            return
         fill = BUTTON_FILL if self.enabled else (150, 130, 110)
         border = BUTTON_BORDER if self.enabled else (110, 95, 80)
         pygame.draw.rect(surf, fill, self.rect, border_radius=self.radius)
@@ -273,8 +401,16 @@ class Game:
     # -- asset loading ---------------------------------------------------
 
     def _load_assets(self) -> None:
-        self.bg = load_image("Background.png", (VIRTUAL_W, VIRTUAL_H), (60, 38, 26))
+        self.bg = pygame.transform.smoothscale(
+            load_image("Background.png", (VIRTUAL_W, VIRTUAL_H), (60, 38, 26)), (VIRTUAL_W, VIRTUAL_H)
+        )
+        self.bg_faded = pygame.transform.smoothscale(
+            load_image("background_faded.png", (VIRTUAL_W, VIRTUAL_H), (90, 60, 40)), (VIRTUAL_W, VIRTUAL_H)
+        )
         self.logo = load_image("LOGO_food_court.png", (600, 460), (214, 122, 54))
+        self.logo_small = pygame.transform.smoothscale(
+            self.logo, (110, round(110 * self.logo.get_height() / self.logo.get_width()))
+        )
         self.dictionary_icon = load_image("dictionary icon.PNG", (48, 64), (214, 122, 54))
 
         health_sheet = load_image("carrot_heath_bar.png", (2160, 1620), (214, 122, 54))
@@ -292,6 +428,16 @@ class Game:
         self.chef = Chef(path=ASSET_DIR / "Chef_SpriteSheet.png")
         self.tomato_frames = self.tomato.frames
         self.chef_frames = self.chef.frames
+
+        enemy_firsts = [self.peeler.frames[0]]
+        for sheet in ("Knife_SpriteSheet.png", "Pot_SpriteSheet.png"):
+            try:
+                enemy_firsts.append(SpriteStrip(ASSET_DIR / sheet, frame_count=5, painted_width=5585).frames[0])
+            except RuntimeError:
+                enemy_firsts.append(self.peeler.frames[0])
+        diameter = LEVEL_CIRCLE_RECTS[0].width
+        self.level_portraits = [circle_portrait(f, diameter) for f in enemy_firsts]
+        self.level_portraits_locked = [circle_portrait(f, diameter, bg=(70, 70, 70), darken=True) for f in enemy_firsts]
 
         self.tomato_frames = [scale_square(f, CHARACTER_SIZE) for f in self.tomato_frames]
         self.chef_frames = [
@@ -563,25 +709,25 @@ class Game:
             return
 
         if self.state in ("INTRO", "FEEDBACK", "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
-            self.buttons.append(Button(pygame.Rect(1190, 16, 56, 56), "Dict", self._open_dictionary))
-            self.buttons.append(Button(pygame.Rect(1122, 16, 56, 56), "Opts", self._open_settings))
+            self.buttons.append(Button(pygame.Rect(1196, 18, 56, 56), "", self._open_dictionary,
+                                       style="icon", icon="book"))
+            self.buttons.append(Button(pygame.Rect(1126, 18, 56, 56), "", self._open_settings,
+                                       style="icon", icon="gear"))
 
         if self.state == "MENU":
-            self.buttons.append(Button(pygame.Rect(540, 290, 200, 44), "How to Play", self._open_how_to_play))
-            self.buttons.append(Button(pygame.Rect(540, 346, 200, 44), "Dictionary", self._open_dictionary))
-            self.buttons.append(Button(pygame.Rect(540, 402, 200, 44), "Settings", self._open_settings))
-            self.buttons.append(Button(pygame.Rect(490, 480, 300, 64), "Start", self._open_level_select))
+            self.buttons.append(Button(pygame.Rect(520, 300, 250, 40), "How to Play", self._open_how_to_play, style="link"))
+            self.buttons.append(Button(pygame.Rect(520, 350, 250, 40), "Dictionary", self._open_dictionary, style="link"))
+            self.buttons.append(Button(pygame.Rect(520, 400, 250, 40), "Settings", self._open_settings, style="link"))
+            self.buttons.append(Button(pygame.Rect(510, 470, 260, 64), "Start", self._open_level_select))
         elif self.state == "HOW_TO_PLAY":
-            self.buttons.append(Button(pygame.Rect(36, 24, 110, 48), "Back", self._go_menu))
+            self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._go_menu, style="icon", icon="return"))
         elif self.state == "LEVEL_SELECT":
-            self.buttons.append(Button(pygame.Rect(36, 24, 110, 48), "Back", self._go_menu))
-            level_labels = {1: "LVL 1", 2: "LVL 2", 3: "LVL 3"}
+            self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._go_menu, style="icon", icon="return"))
             for i, level in enumerate((1, 2, 3)):
                 unlocked = self._level_unlocked(level)
-                label = level_labels[level] if unlocked else "LOCKED"
                 action = (lambda lvl=level: self._select_level(lvl)) if unlocked else self._noop
                 self.buttons.append(
-                    Button(LEVEL_CIRCLE_RECTS[i], label, action, enabled=unlocked, radius=110)
+                    Button(LEVEL_CIRCLE_RECTS[i], "", action, enabled=unlocked, style="hidden")
                 )
         elif self.state == "INTRO":
             self.buttons.append(
@@ -591,52 +737,39 @@ class Game:
             self.buttons.append(
                 Button(pygame.Rect(300, 556, 680, 56), "Add To Your Dictionary", self.on_add_to_dictionary)
             )
-        elif self.state == "LEVEL_COMPLETE":
-            self.buttons.append(Button(pygame.Rect(360, 560, 260, 60), "Next Level", self._next_level))
-            self.buttons.append(Button(pygame.Rect(660, 560, 260, 60), "Home", self._go_home))
-        elif self.state == "LEVEL_FAILED":
-            self.buttons.append(Button(pygame.Rect(360, 560, 260, 60), "Try Again", self._try_again))
-            self.buttons.append(Button(pygame.Rect(660, 560, 260, 60), "Home", self._go_home))
-        elif self.state == "INFINITE_RESULTS":
-            self.buttons.append(
-                Button(pygame.Rect(360, 560, 260, 60), "Play Again", self._replay_infinite)
-            )
-            self.buttons.append(Button(pygame.Rect(660, 560, 260, 60), "Home", self._go_home))
+        elif self.state in ("LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
+            home = pygame.Rect(0, 0, 88, 88)
+            home.center = (560, 500)
+            other = home.copy()
+            other.center = (720, 500)
+            self.buttons.append(Button(home, "home", self._go_home, style="icon", icon="home"))
+            if self.state == "LEVEL_COMPLETE":
+                self.buttons.append(Button(other, "next level", self._next_level, style="icon", icon="next"))
+            elif self.state == "LEVEL_FAILED":
+                self.buttons.append(Button(other, "try again", self._try_again, style="icon", icon="return"))
+            else:
+                self.buttons.append(Button(other, "play again", self._replay_infinite, style="icon", icon="return"))
 
     def _layout_dictionary_buttons(self) -> None:
-        self.buttons.append(Button(pygame.Rect(1150, 60, 48, 48), "X", self._close_dictionary))
+        self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._close_dictionary,
+                                   style="icon", icon="return"))
         entries = sorted(self.progress.dictionary_ids)
         if entries:
-            self.buttons.append(Button(pygame.Rect(120, 360, 56, 56), "<", self._prev_page))
-            self.buttons.append(Button(pygame.Rect(1104, 360, 56, 56), ">", self._next_page))
+            self.buttons.append(Button(pygame.Rect(150, 330, 72, 72), "", self._prev_page,
+                                       style="icon", icon="prev"))
+            self.buttons.append(Button(pygame.Rect(1058, 330, 72, 72), "", self._next_page,
+                                       style="icon", icon="next"))
 
     def _layout_settings_buttons(self) -> None:
-        self.buttons.append(Button(pygame.Rect(36, 24, 110, 48), "Back", self._close_settings))
-        self.buttons.append(
-            Button(
-                pygame.Rect(440, 300, 400, 50),
-                f"Music: {'On' if self.audio.music_on else 'Off'}",
-                self._toggle_music,
-            )
-        )
-        self.buttons.append(
-            Button(
-                pygame.Rect(440, 366, 400, 50),
-                f"Sound Effects: {'On' if self.audio.sfx_on else 'Off'}",
-                self._toggle_sfx,
-            )
-        )
+        self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._close_settings,
+                                   style="icon", icon="return"))
+        for rect, action in zip(SETTINGS_ROW_RECTS, (self._toggle_music, self._toggle_sfx)):
+            self.buttons.append(Button(rect, "", action, style="hidden"))
         if self.show_reset_confirm:
-            self.buttons.append(
-                Button(pygame.Rect(440, 470, 190, 54), "Yes, Reset", self._confirm_reset)
-            )
-            self.buttons.append(
-                Button(pygame.Rect(650, 470, 190, 54), "Cancel", self._cancel_reset)
-            )
+            self.buttons.append(Button(pygame.Rect(505, 530, 130, 46), "Yes, Reset", self._confirm_reset))
+            self.buttons.append(Button(pygame.Rect(645, 530, 130, 46), "Cancel", self._cancel_reset))
         else:
-            self.buttons.append(
-                Button(pygame.Rect(440, 470, 400, 54), "Reset Game Progress", self._ask_reset)
-            )
+            self.buttons.append(Button(pygame.Rect(530, 530, 220, 46), "Reset Progress", self._ask_reset))
 
     # -- button callbacks ---------------------------------------------------
 
@@ -734,7 +867,11 @@ class Game:
     # -- drawing ---------------------------------------------------
 
     def draw(self, surf: pygame.Surface) -> None:
-        surf.blit(pygame.transform.smoothscale(self.bg, (VIRTUAL_W, VIRTUAL_H)), (0, 0))
+        faded_states = ("MENU", "HOW_TO_PLAY", "LEVEL_SELECT", "SETTINGS",
+                        "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS")
+        surf.blit(self.bg_faded if self.state in faded_states else self.bg, (0, 0))
+        if self.state in ("LEVEL_SELECT", "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
+            surf.blit(self.logo_small, self.logo_small.get_rect(bottomright=(VIRTUAL_W - 24, VIRTUAL_H - 16)))
 
         if self.state == "MENU":
             self._draw_menu(surf)
@@ -767,7 +904,15 @@ class Game:
             self._draw_dictionary(surf)
 
         for button in self.buttons:
-            button.draw(surf, self.fonts["small"] if len(button.label) <= 2 else self.fonts["body"])
+            if button.style == "icon":
+                font = self.fonts["body_bold"]
+            elif button.style == "link":
+                font = self.fonts["large"]
+            elif button.label == "Start":
+                font = self.fonts["title_bold"]
+            else:
+                font = self.fonts["body"]
+            button.draw(surf, font)
 
     def _draw_hud(self, surf: pygame.Surface) -> None:
         health_frame = self.health_frames[
@@ -780,16 +925,18 @@ class Game:
         surf.blit(label, label.get_rect(midtop=(VIRTUAL_W // 2, 16)))
 
     def _draw_menu(self, surf: pygame.Surface) -> None:
-        panel = pygame.Rect(390, 40, 500, 560)
-        draw_panel(surf, panel, radius=26)
+        paper = pygame.Rect(460, 90, 360, 490)
+        draw_paper(surf, paper, tilt=-3)
         logo = pygame.transform.smoothscale(
-            self.logo, (240, int(240 * self.logo.get_height() / self.logo.get_width()))
+            self.logo, (300, int(300 * self.logo.get_height() / self.logo.get_width()))
         )
-        surf.blit(logo, logo.get_rect(midtop=(panel.centerx, panel.top + 20)))
+        surf.blit(logo, logo.get_rect(midtop=(paper.centerx, 30)))
+        tomato = pygame.transform.smoothscale(self.tomato_frames[0], (64, 64))
+        surf.blit(tomato, tomato.get_rect(bottomright=(785, 482)))
 
     def _draw_how_to_play(self, surf: pygame.Surface) -> None:
         panel = pygame.Rect(240, 90, 800, 540)
-        draw_panel(surf, panel, radius=24)
+        draw_paper(surf, panel, tilt=-1.5)
         title = self.fonts["title"].render("How to Play", True, TEXT_DARK)
         surf.blit(title, title.get_rect(center=(panel.centerx, panel.top + 50)))
 
@@ -814,13 +961,21 @@ class Game:
             y += self.fonts["body"].get_height() + 6
 
     def _draw_level_select(self, surf: pygame.Surface) -> None:
-        title = self.fonts["title"].render("Select a Level", True, (250, 240, 225))
-        surf.blit(title, title.get_rect(midtop=(VIRTUAL_W // 2, 40)))
-
-        for level, rect in zip((1, 2, 3), LEVEL_CIRCLE_RECTS):
-            if level in self.progress.completed_levels and self._level_unlocked(level):
-                hint = self.fonts["small"].render("Replay = Infinite Mode", True, (250, 240, 225))
-                surf.blit(hint, hint.get_rect(midtop=(rect.centerx, rect.bottom + 10)))
+        for i, (level, rect) in enumerate(zip((1, 2, 3), LEVEL_CIRCLE_RECTS)):
+            unlocked = self._level_unlocked(level)
+            pygame.draw.circle(surf, (60, 34, 20), (rect.centerx + 3, rect.centery + 5), rect.width // 2)
+            portrait = self.level_portraits[i] if unlocked else self.level_portraits_locked[i]
+            surf.blit(portrait, rect)
+            if not unlocked:
+                draw_icon(surf, "lock", rect.center, 80, (245, 245, 245))
+            label = f"LVL {level}" if unlocked else "LOCKED"
+            draw_outlined_text(surf, self.fonts["title_bold"], label, (rect.centerx, rect.bottom + 34), width=3)
+            if level in self.progress.completed_levels:
+                check_center = (rect.right - 22, rect.bottom - 26)
+                draw_icon(surf, "check", (check_center[0] + 2, check_center[1] + 2), 44, (30, 70, 30))
+                draw_icon(surf, "check", check_center, 44, (70, 190, 80))
+                hint = self.fonts["small"].render("replay = infinite mode", True, (250, 240, 225))
+                surf.blit(hint, hint.get_rect(midtop=(rect.centerx, rect.bottom + 62)))
 
     def _draw_intro(self, surf: pygame.Surface) -> None:
         self._draw_hud(surf)
@@ -979,41 +1134,45 @@ class Game:
         big = pygame.transform.smoothscale(chef, (chef.get_width() * 2, chef.get_height() * 2))
         surf.blit(big, big.get_rect(center=(VIRTUAL_W // 2, VIRTUAL_H // 2)))
 
+    def _draw_white_card(self, surf: pygame.Surface, card: pygame.Rect) -> None:
+        shadow = pygame.Surface(card.size, pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (0, 0, 0, 80), shadow.get_rect(), border_radius=18)
+        surf.blit(shadow, card.move(6, 8))
+        pygame.draw.rect(surf, CARD_WHITE, card, border_radius=18)
+        for x in (card.left + 18, card.right - 18):
+            for y in (card.top + 18, card.bottom - 18):
+                pygame.draw.circle(surf, SPARKLE_COLOR, (x, y), 4)
+
     def _draw_result_card(self, surf: pygame.Surface, title: str, color: tuple) -> None:
-        self._draw_hud(surf)
-        card = pygame.Rect(340, 160, 600, 380)
-        pygame.draw.rect(surf, CARD_WHITE, card, border_radius=26)
+        card = pygame.Rect(360, 120, 560, 380)
+        self._draw_white_card(surf, card)
         label = self.fonts["title_bold"].render(title, True, color)
-        surf.blit(label, label.get_rect(center=(card.centerx, card.top + 50)))
+        surf.blit(label, label.get_rect(center=(card.centerx, card.top + 62)))
 
         tomato_idx = 0 if title == "LEVEL COMPLETE" else len(self.tomato_frames) - 1
-        tomato_img = self.tomato_frames[tomato_idx]
-        tomato_small = pygame.transform.smoothscale(tomato_img, (140, 140))
-        surf.blit(tomato_small, tomato_small.get_rect(center=(card.centerx, card.top + 160)))
+        tomato_img = pygame.transform.smoothscale(self.tomato_frames[tomato_idx], (180, 180))
+        surf.blit(tomato_img, tomato_img.get_rect(center=(card.centerx, card.top + 200)))
 
         if title == "LEVEL COMPLETE":
             sub = f"All {len(self.fallacy_ids)} fallacies mastered!"
         else:
             sub = "Health depleted -- give it another go."
-        sub_label = self.fonts["body"].render(sub, True, (40, 34, 28))
-        surf.blit(sub_label, sub_label.get_rect(center=(card.centerx, card.top + 260)))
+        sub_label = self.fonts["small"].render(sub, True, (90, 80, 70))
+        surf.blit(sub_label, sub_label.get_rect(center=(card.centerx, card.top + 310)))
 
     def _draw_infinite_results(self, surf: pygame.Surface) -> None:
-        self._draw_hud(surf)
-        card = pygame.Rect(340, 200, 600, 340)
-        draw_panel(surf, card, radius=22)
-        label = self.fonts["title"].render("INFINITE MODE", True, TEXT_DARK)
-        surf.blit(label, label.get_rect(center=(card.centerx, card.top + 60)))
-        survived = self.fonts["large"].render(
-            f"Survived: {self.infinite_survived:.1f}s", True, TEXT_DARK
-        )
-        surf.blit(survived, survived.get_rect(center=(card.centerx, card.top + 130)))
+        card = pygame.Rect(360, 120, 560, 380)
+        self._draw_white_card(surf, card)
+        label = self.fonts["title_bold"].render("INFINITE MODE", True, BUTTON_BORDER)
+        surf.blit(label, label.get_rect(center=(card.centerx, card.top + 62)))
+        survived = self.fonts["title"].render(f"{self.infinite_survived:.1f}s", True, TEXT_DARK)
+        surf.blit(survived, survived.get_rect(center=(card.centerx, card.top + 150)))
         best = self.progress.infinite_best_seconds.get(self.level, 0.0)
         best_label = self.fonts["body"].render(f"Best: {best:.1f}s", True, TEXT_DARK)
-        surf.blit(best_label, best_label.get_rect(center=(card.centerx, card.top + 175)))
+        surf.blit(best_label, best_label.get_rect(center=(card.centerx, card.top + 210)))
         if self.infinite_is_best:
-            new_best = self.fonts["body"].render("New best!", True, CORRECT_COLOR)
-            surf.blit(new_best, new_best.get_rect(center=(card.centerx, card.top + 210)))
+            new_best = self.fonts["body_bold"].render("New best!", True, CORRECT_COLOR)
+            surf.blit(new_best, new_best.get_rect(center=(card.centerx, card.top + 250)))
 
     def _draw_toasts(self, surf: pygame.Surface) -> None:
         y = 90
@@ -1036,7 +1195,7 @@ class Game:
         surf.blit(overlay, (0, 0))
 
         book = pygame.Rect(260, 100, 760, 500)
-        draw_panel(surf, book, radius=24)
+        draw_paper(surf, book, tilt=-1)
 
         entries = sorted(self.progress.dictionary_ids)
         title = self.fonts["title"].render("Fallacy Dictionary", True, TEXT_DARK)
@@ -1081,20 +1240,29 @@ class Game:
         surf.blit(page_label, page_label.get_rect(center=(book.centerx, book.bottom - 30)))
 
     def _draw_settings(self, surf: pygame.Surface) -> None:
-        overlay = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
-        overlay.fill((10, 6, 4, 160))
-        surf.blit(overlay, (0, 0))
+        paper = SETTINGS_PAPER_RECT
+        draw_paper(surf, paper, tilt=2)
 
-        panel = pygame.Rect(340, 160, 600, 420)
-        draw_panel(surf, panel, radius=24)
-        title = self.fonts["title"].render("Settings", True, TEXT_DARK)
-        surf.blit(title, title.get_rect(center=(panel.centerx, panel.top + 50)))
+        tomato = pygame.transform.smoothscale(self.tomato_frames[0], (110, 110))
+        surf.blit(tomato, tomato.get_rect(center=(paper.centerx, paper.top + 110)))
+        title = self.fonts["large"].render("Settings", True, TEXT_DARK)
+        surf.blit(title, title.get_rect(center=(paper.centerx, paper.top + 200)))
+
+        rows = (("Background Music", self.audio.music_on), ("Sound Effects", self.audio.sfx_on))
+        for rect, (text, on) in zip(SETTINGS_ROW_RECTS, rows):
+            label = self.fonts["body"].render(text, True, (70, 55, 40))
+            surf.blit(label, label.get_rect(midleft=(rect.left, rect.centery)))
+            switch = pygame.Rect(0, 0, 64, 32)
+            switch.midright = (rect.right, rect.centery)
+            pygame.draw.rect(surf, CORRECT_COLOR if on else (170, 160, 150), switch, border_radius=16)
+            knob_x = switch.right - 16 if on else switch.left + 16
+            pygame.draw.circle(surf, (255, 255, 255), (knob_x, switch.centery), 12)
+            pygame.draw.line(surf, (215, 200, 180), (rect.left, rect.bottom + 6), (rect.right, rect.bottom + 6), 1)
 
         if self.show_reset_confirm:
-            warn = self.fonts["body"].render(
-                "Erase all saved dictionary and progress?", True, INCORRECT_COLOR
-            )
-            surf.blit(warn, warn.get_rect(center=(panel.centerx, panel.top + 220)))
+            for i, line in enumerate(("Erase all saved dictionary", "and progress?")):
+                warn = self.fonts["small"].render(line, True, INCORRECT_COLOR)
+                surf.blit(warn, warn.get_rect(center=(paper.centerx, 486 + i * 20)))
 
 
 def window_to_virtual(pos: tuple[int, int], window_size: tuple[int, int]) -> tuple[int, int]:
