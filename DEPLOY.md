@@ -55,22 +55,28 @@ go:
    - **Name**: `food-court` (or anything you like — this sets the
      `*.onrender.com` subdomain).
    - **Branch**: `main`.
-   - **Build Command**: `pip install -r requirements.txt && python -m pygbag --build .`
+   - **Build Command**: `pip install pygbag==0.9.2 && python -m pygbag --build .`
    - **Publish Directory**: `build/web`
-5. Click **Create Static Site**.
+5. Under **Environment Variables**, add:
+   - `PYTHON_VERSION` = `3.11.11`
+   - `SKIP_INSTALL_DEPS` = `true`
+6. Click **Create Static Site**.
 
 Render's static-site build environment has Python 3 and pip available by
 default (confirmed by Render users building other Python-based static sites,
-e.g. MkDocs, the same way) — no extra runtime selection is needed.
+e.g. MkDocs, the same way) — no extra runtime selection is needed. `PYTHON_VERSION`
+pins that default to a known-good 3.11.x instead of whatever Render's current
+default happens to be. `SKIP_INSTALL_DEPS` turns off Render's own dependency
+auto-detection (which runs before the build command and can misread a project
+that isn't a typical `requirements.txt`-driven web app), so installing
+`pygbag` is entirely up to the build command.
 
 ## Notes and troubleshooting
 
-- **Build command**: `pip install -r requirements.txt` installs `pygame-ce`
-  and `pygbag` to match `requirements.txt`, though only `pygbag` is strictly
-  needed for the build step itself (`pygame-ce` runs client-side in the
-  browser, not on Render's build machine). Leaving both in keeps the build
-  command identical to local dev; drop `pygame-ce` from the command if you
-  want a slightly faster build.
+- **Build command**: only `pygbag` is installed, not the full
+  `requirements.txt` — `pygame-ce` runs client-side in the browser, never on
+  Render's build machine, so installing it there only slows the build down
+  (and `SKIP_INSTALL_DEPS` means nothing installs it for you implicitly).
 - **First build is slower**: Pygbag downloads and caches a runtime template
   from `pygame-web.github.io` the first time it runs in a fresh environment.
   Render's build cache may or may not persist this between deploys depending
