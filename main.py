@@ -48,7 +48,7 @@ GAVEL_DURATION = 1.2
 TOAST_DURATION = 2.0
 FEEDBACK_ENTER_SECONDS = 0.3
 FEEDBACK_EXIT_SECONDS = 0.3
-DIALOGUE_CENTER_SECONDS = 0.1
+DIALOGUE_CENTER_SECONDS = 0.4
 DIALOGUE_MOVE_SECONDS = 1.0
 PAGE_TURN_SECONDS = 0.65
 CARDS_PER_SPREAD = 4  # two dictionary cards on each page of the open book
@@ -1030,8 +1030,6 @@ class Game:
     def _layout_settings_buttons(self) -> None:
         self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._close_settings,
                                    style="icon", icon="return"))
-        for rect, action in zip(SETTINGS_ROW_RECTS, (self._toggle_music, self._toggle_sfx)):
-            self.buttons.append(Button(rect, "", action, style="hidden"))
         if self.show_reset_confirm:
             self.buttons.append(Button(pygame.Rect(505, 530, 130, 46), "Yes, Reset", self._confirm_reset))
             self.buttons.append(Button(pygame.Rect(645, 530, 130, 46), "Cancel", self._cancel_reset))
@@ -1907,11 +1905,8 @@ async def main() -> None:
         else:
             game.draw(canvas)
 
-        scale = min(window_size[0] / VIRTUAL_W, window_size[1] / VIRTUAL_H)
-        draw_w, draw_h = int(VIRTUAL_W * scale), int(VIRTUAL_H * scale)
-        scaled = pygame.transform.smoothscale(canvas, (draw_w, draw_h))
         screen.fill((0, 0, 0))
-        screen.blit(scaled, ((window_size[0] - draw_w) // 2, (window_size[1] - draw_h) // 2))
+        screen.blit(canvas, (0, 0))
 
         pygame.display.flip()
         await asyncio.sleep(0)
