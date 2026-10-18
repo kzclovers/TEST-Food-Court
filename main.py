@@ -53,6 +53,16 @@ FEEDBACK_ENTER_SECONDS = 0.3
 FEEDBACK_EXIT_SECONDS = 0.3
 DIALOGUE_CENTER_SECONDS = 3.0
 DIALOGUE_MOVE_SECONDS = 0.4
+PAGE_TURN_SECONDS = 0.65
+CARDS_PER_SPREAD = 4  # two dictionary cards on each page of the open book
+
+# Open-book art (`Untitled_Artwork 9.png`) is a square canvas. These rects
+# are in that image's pixel space: the crop is the opaque book, and the
+# page rects sit on the cream of each page, below the binder rings.
+BOOK_CROP = pygame.Rect(162, 294, 1724, 1366)
+LEFT_PAGE_SRC = pygame.Rect(250, 660, 700, 900)
+RIGHT_PAGE_SRC = pygame.Rect(1102, 660, 688, 900)
+BOOK_MAX = (1080, 690)
 
 PAPER_BOUNDS = pygame.Rect(230, 320, 820, 230)
 CHEF_ANCHOR = (640, 500)
@@ -126,6 +136,19 @@ def wrap_text(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
 def draw_panel(surf: pygame.Surface, rect: pygame.Rect, radius: int = 18) -> None:
     pygame.draw.rect(surf, PANEL_CREAM, rect, border_radius=radius)
     pygame.draw.rect(surf, PANEL_BORDER, rect, width=3, border_radius=radius)
+
+
+def smoothstep(t: float) -> float:
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
+
+
+def book_display_size() -> tuple[int, int]:
+    scale = min(BOOK_MAX[0] / BOOK_CROP.width, BOOK_MAX[1] / BOOK_CROP.height)
+    return (
+        max(1, int(BOOK_CROP.width * scale)),
+        max(1, int(BOOK_CROP.height * scale)),
+    )
 
 
 def lerp_rect(a: pygame.Rect, b: pygame.Rect, t: float) -> pygame.Rect:
@@ -358,7 +381,14 @@ class Game:
 
         self.buttons: list[Button] = []
         self.show_dictionary = False
-        self.dictionary_page = 0
+        self.dictionary_page = 0  # spread index; four cards, two on each page
+        self.page_anim = None
+        self.zoomed_card: int | None = None
+        self.zoom_t = 1.0
+        self._card_cache: dict = {}
+        self.review_fallacy_id: int | None = None
+        self.review_clicks = 0
+        self.review_age = 0.0
         self.show_reset_confirm = False
         self.pre_settings_state = "MENU"
 
@@ -412,6 +442,34 @@ class Game:
             self.logo, (110, round(110 * self.logo.get_height() / self.logo.get_width()))
         )
         self.dictionary_icon = load_image("dictionary icon.PNG", (48, 64), (214, 122, 54))
+        book = load_image("Untitled_Artwork 9.png", BOOK_CROP.size, (255, 247, 206))
+        if book.get_width() >= BOOK_CROP.right and book.get_height() >= BOOK_CROP.bottom:
+            book = book.subsurface(BOOK_CROP).copy()
+        self.book_image = pygame.transform.smoothscale(book, book_display_size())
+        width, height = self.book_image.get_size()
+        gutter = max(10, width // 24)
+        mid = width // 2
+        self.page_gutter = gutter
+        self.page_halves = (
+            self.book_image.subsurface(pygame.Rect(0, 0, mid - gutter, height)).copy(),
+            self.book_image.subsurface(pygame.Rect(mid + gutter, 0, width - mid - gutter, height)).copy(),
+        )
+        self.book_stitch = self.book_image.subsurface(
+            pygame.Rect(mid - gutter, 0, gutter * 2, height)
+        ).copy()
+        # Numbered files run backwards: #18 / DictionaryCard18 is fallacy 1.
+        self.dictionary_cards = {
+            fid: load_image(f"DictionaryCard{19 - fid:02d}.png", (480, 390), CARD_WHITE)
+            for fid in range(1, 19)
+        }
+        self.detail_cards = {
+            fid: load_image(f"Dictionary Card/#{19 - fid:02d}.png", (602, 376), CARD_WHITE)
+            for fid in range(1, 19)
+        }
+        self.add_cards = {
+            fid: load_image(f"Add cards/#{19 - fid:02d}.png", (602, 472), CARD_WHITE)
+            for fid in range(1, 19)
+        }
 
         health_sheet = load_image("carrot_heath_bar.png", (2160, 1620), (214, 122, 54))
         self.health_frames: list[pygame.Surface] = []
@@ -482,6 +540,11 @@ class Game:
         self.toasts = []
         self.last_claim_for = {}
         self.show_dictionary = False
+        self.page_anim = None
+        self.zoomed_card = None
+        self.review_fallacy_id = None
+        self.review_clicks = 0
+        self.review_age = 0.0
         self.show_reset_confirm = False
         self.dialogue_phase = "DONE"
         self.dialogue_timer = 0.0
@@ -502,11 +565,20 @@ class Game:
         self.teaching_fallacy_id = self.pending_intro_queue.pop(0)
         self.state = "TEACHING"
 
-    def on_continue(self) -> None:
+    def _quizzable_ids(self) -> list[int]:
+        """While a fallacy is still uncollected, the next rounds use that one.
+
+        The teaching card then offers the fallacy the player just played with.
+        Once every fallacy is in the dictionary, questions mix the collected set.
+        """
+        if not self.infinite and self.pending_intro_queue:
+            return [self.pending_intro_queue[0]]
         if self.introduced_ids:
-            self.next_question()
-        else:
-            self.begin_first_teaching()
+            return list(self.introduced_ids)
+        return list(self.fallacy_ids)
+
+    def on_continue(self) -> None:
+        self.next_question()
 
     def on_add_to_dictionary(self) -> None:
         fid = self.teaching_fallacy_id
@@ -521,7 +593,10 @@ class Game:
     # -- questions ---------------------------------------------------
 
     def next_question(self) -> None:
-        fid = self.selector.choose(self.introduced_ids, self.rng)
+        pool = self._quizzable_ids()
+        if not pool:
+            return
+        fid = self.selector.choose(pool, self.rng)
         bank = game_data.claims_for(self.enemy_name, fid)
         if bank:
             last = self.last_claim_for.get(fid)
@@ -593,11 +668,17 @@ class Game:
             self.enemy_losses += 1
             self.enemy_flash = FLASH_DURATION
             self.result_label = "CORRECT"
+            self.review_fallacy_id = None
+            self.review_clicks = 0
             self.audio.play_sfx("correct")
         else:
             self.health = max(0, self.health - 1)
             self.tomato_flash = FLASH_DURATION
             self.result_label = "TIME OUT" if timeout else "INCORRECT"
+            # Show the matching dictionary card. It is not collected.
+            self.review_fallacy_id = fid
+            self.review_clicks = 0
+            self.review_age = 0.0
             self.audio.play_sfx("incorrect")
 
         self.result_correct = correct
@@ -610,17 +691,22 @@ class Game:
         self.questions_since_intro += 1
         self.state = "FEEDBACK"
 
+    def _ack_review_card(self) -> None:
+        """A wrong-answer card stays up until the player clicks it twice."""
+        if self.state != "FEEDBACK" or self.review_fallacy_id is None:
+            return
+        self.review_clicks += 1
+        if self.review_clicks >= 2:
+            self.after_feedback()
+
     def after_feedback(self) -> None:
+        self.review_fallacy_id = None
+        self.review_clicks = 0
         if self.health <= 0:
             if self.infinite:
                 self.finish_infinite()
             else:
                 self.start_gavel("LEVEL_FAILED")
-            return
-
-        if not self.infinite and self.selector.all_mastered(self.fallacy_ids):
-            self.progress.complete_level(self.level)
-            self.start_gavel("LEVEL_COMPLETE")
             return
 
         if (
@@ -631,6 +717,15 @@ class Game:
             self.teaching_fallacy_id = self.pending_intro_queue.pop(0)
             self.questions_since_intro = 0
             self.state = "TEACHING"
+            return
+
+        if (
+            not self.infinite
+            and not self.pending_intro_queue
+            and self.selector.all_mastered(self.fallacy_ids)
+        ):
+            self.progress.complete_level(self.level)
+            self.start_gavel("LEVEL_COMPLETE")
             return
 
         self.next_question()
@@ -666,13 +761,25 @@ class Game:
                     for paper in self.papers:
                         paper.update(dt)
         elif self.state == "FEEDBACK":
-            self.feedback_timer -= dt
-            if self.feedback_timer <= 0:
-                self.after_feedback()
+            if self.review_fallacy_id is not None:
+                self.review_age += dt
+            else:
+                self.feedback_timer -= dt
+                if self.feedback_timer <= 0:
+                    self.after_feedback()
         elif self.state == "GAVEL":
             self.gavel_timer -= dt
             if self.gavel_timer <= 0:
                 self.state = self.gavel_target
+
+        if self.page_anim is not None:
+            self.page_anim["t"] += dt / PAGE_TURN_SECONDS
+            if self.page_anim["t"] >= 1.0:
+                self.dictionary_page = self.page_anim["target"]
+                self.page_anim = None
+
+        if self.zoomed_card is not None:
+            self.zoom_t = min(1.0, self.zoom_t + dt / 0.18)
 
         self.enemy_flash = max(0.0, self.enemy_flash - dt)
         self.tomato_flash = max(0.0, self.tomato_flash - dt)
@@ -733,9 +840,12 @@ class Game:
             self.buttons.append(
                 Button(pygame.Rect(540, 560, 200, 60), "Continue", self.on_continue)
             )
-        elif self.state == "TEACHING":
+        elif self.state == "TEACHING" and self.teaching_fallacy_id is not None:
+            _card_rect, button_rect = self._add_card_layout(self.teaching_fallacy_id)
+            self.buttons.append(Button(button_rect, "", self.on_add_to_dictionary, style="hidden"))
+        elif self.state == "FEEDBACK" and self.review_fallacy_id is not None:
             self.buttons.append(
-                Button(pygame.Rect(300, 556, 680, 56), "Add To Your Dictionary", self.on_add_to_dictionary)
+                Button(pygame.Rect(0, 0, VIRTUAL_W, VIRTUAL_H), "", self._ack_review_card, style="hidden")
             )
         elif self.state in ("LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
             home = pygame.Rect(0, 0, 88, 88)
@@ -753,12 +863,37 @@ class Game:
     def _layout_dictionary_buttons(self) -> None:
         self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._close_dictionary,
                                    style="icon", icon="return"))
-        entries = sorted(self.progress.dictionary_ids)
-        if entries:
-            self.buttons.append(Button(pygame.Rect(150, 330, 72, 72), "", self._prev_page,
-                                       style="icon", icon="prev"))
-            self.buttons.append(Button(pygame.Rect(1058, 330, 72, 72), "", self._next_page,
-                                       style="icon", icon="next"))
+        if self.zoomed_card is not None:
+            self.buttons.append(
+                Button(pygame.Rect(0, 0, VIRTUAL_W, VIRTUAL_H), "", self._close_zoom, style="hidden")
+            )
+            return
+        origin, left_rect, right_rect = self._book_geometry()
+        turning = self.page_anim is not None
+        if not turning:
+            self._layout_card_buttons(left_rect, right_rect)
+        if self._spread_count() <= 1:
+            return
+        left_half, right_half = self._half_rects(origin)
+        self.buttons.append(
+            Button(pygame.Rect(left_half.left - 80, left_half.centery - 36, 72, 72), "", self._prev_page,
+                   enabled=not turning, style="icon", icon="prev")
+        )
+        self.buttons.append(
+            Button(pygame.Rect(right_half.right + 8, right_half.centery - 36, 72, 72), "", self._next_page,
+                   enabled=not turning, style="icon", icon="next")
+        )
+        self.buttons.append(Button(left_half, "", self._prev_page, enabled=not turning, style="hidden"))
+        self.buttons.append(Button(right_half, "", self._next_page, enabled=not turning, style="hidden"))
+
+    def _layout_card_buttons(self, left_rect: pygame.Rect, right_rect: pygame.Rect) -> None:
+        ids = self._spread_ids(self.dictionary_page)
+        slots = self._page_slots(left_rect) + self._page_slots(right_rect)
+        for fid, slot in zip(ids, slots):
+            if fid is None:
+                continue
+            hit = self._fitted_rect(self.dictionary_cards[fid], slot)
+            self.buttons.append(Button(hit, "", lambda fid=fid: self._open_card(fid), style="hidden"))
 
     def _layout_settings_buttons(self) -> None:
         self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._close_settings,
@@ -776,19 +911,64 @@ class Game:
     def _open_dictionary(self) -> None:
         self.show_dictionary = True
         self.dictionary_page = 0
+        self.page_anim = None
+        self.zoomed_card = None
 
     def _close_dictionary(self) -> None:
         self.show_dictionary = False
+        self.page_anim = None
+        self.zoomed_card = None
+
+    def _open_card(self, fid: int) -> None:
+        if self.page_anim is not None:
+            return
+        self.zoomed_card = fid
+        self.zoom_t = 0.0
+
+    def _close_zoom(self) -> None:
+        self.zoomed_card = None
+
+    def _dictionary_entries(self) -> list[int]:
+        return sorted(self.progress.dictionary_ids)
+
+    def _spread_starts(self) -> list[int]:
+        """Each picture is a window of four cards, two on each page.
+
+        Windows step forward, and the last one is pulled back so it is
+        still four cards whenever that many have been collected.
+        """
+        count = len(self._dictionary_entries())
+        if count == 0:
+            return []
+        if count <= CARDS_PER_SPREAD:
+            return [0]
+        last = count - CARDS_PER_SPREAD
+        starts = list(range(0, last + 1, 2))
+        if starts[-1] != last:
+            starts.append(last)
+        return starts
+
+    def _spread_count(self) -> int:
+        return len(self._spread_starts())
+
+    def _turn_page(self, direction: int) -> None:
+        if self.page_anim is not None or self.zoomed_card is not None:
+            return
+        spreads = self._spread_count()
+        if spreads <= 1:
+            return
+        self.page_anim = {
+            "t": 0.0,
+            "direction": direction,
+            "from": self.dictionary_page,
+            "target": (self.dictionary_page + direction) % spreads,
+        }
 
     def _prev_page(self) -> None:
-        entries = sorted(self.progress.dictionary_ids)
-        if entries:
-            self.dictionary_page = (self.dictionary_page - 1) % len(entries)
+        self._turn_page(-1)
 
     def _next_page(self) -> None:
-        entries = sorted(self.progress.dictionary_ids)
-        if entries:
-            self.dictionary_page = (self.dictionary_page + 1) % len(entries)
+        self._turn_page(1)
 
     def _open_settings(self) -> None:
         self.pre_settings_state = self.state
@@ -867,6 +1047,12 @@ class Game:
     # -- drawing ---------------------------------------------------
 
     def draw(self, surf: pygame.Surface) -> None:
+        if self.show_dictionary:
+            surf.blit(self.bg, (0, 0))
+            self._draw_dictionary(surf)
+            self._draw_ui_buttons(surf)
+            return
+
         faded_states = ("MENU", "HOW_TO_PLAY", "LEVEL_SELECT", "SETTINGS",
                         "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS")
         surf.blit(self.bg_faded if self.state in faded_states else self.bg, (0, 0))
@@ -900,9 +1086,9 @@ class Game:
 
         self._draw_toasts(surf)
 
-        if self.show_dictionary:
-            self._draw_dictionary(surf)
+        self._draw_ui_buttons(surf)
 
+    def _draw_ui_buttons(self, surf: pygame.Surface) -> None:
         for button in self.buttons:
             if button.style == "icon":
                 font = self.fonts["body_bold"]
@@ -986,55 +1172,37 @@ class Game:
         )
         surf.blit(sub, sub.get_rect(center=(VIRTUAL_W // 2, 480)))
 
+    def _fitted_card(self, image: pygame.Surface, max_size: tuple[int, int], center: tuple[int, int]) -> pygame.Rect:
+        fit = min(max_size[0] / image.get_width(), max_size[1] / image.get_height())
+        rect = pygame.Rect(0, 0, max(1, round(image.get_width() * fit)), max(1, round(image.get_height() * fit)))
+        rect.center = center
+        return rect
+
+    def _add_card_layout(self, fid: int) -> tuple[pygame.Rect, pygame.Rect]:
+        """The Add cards art already includes the orange button."""
+        image = self.add_cards[fid]
+        card = self._fitted_card(image, (1040, 680), (VIRTUAL_W // 2, VIRTUAL_H // 2))
+        # Measured on the 602x472 add-card artwork.
+        button = pygame.Rect(
+            card.left + round(card.width * 40 / 602),
+            card.top + round(card.height * 328 / 472),
+            round(card.width * 522 / 602),
+            round(card.height * 66 / 472),
+        )
+        return card, button
+
     def _draw_teaching_card(self, surf: pygame.Surface) -> None:
         fid = self.teaching_fallacy_id
         if fid is None:
             return
-        fallacy = FALLACIES_BY_ID[fid]
-
+        image = self.add_cards.get(fid)
+        if image is None:
+            return
         overlay = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
-        overlay.fill((*OVERLAY_DARK, 190))
+        overlay.fill((*OVERLAY_DARK, 160))
         surf.blit(overlay, (0, 0))
-
-        card = pygame.Rect(220, 100, 840, 520)
-        pygame.draw.rect(surf, CARD_WHITE, card, border_radius=26)
-
-        inset = 34
-        for corner in (
-            (card.left + inset, card.top + inset),
-            (card.right - inset, card.top + inset),
-            (card.left + inset, card.bottom - inset),
-            (card.right - inset, card.bottom - inset),
-        ):
-            draw_sparkle(surf, corner, 13, SPARKLE_COLOR)
-
-        number_text = self.fonts["title_bold"].render(f"{fallacy.id}  {fallacy.name}", True, (20, 16, 12))
-        title_pos = (card.left + 64, card.top + 44)
-        surf.blit(number_text, title_pos)
-        if fallacy.alt_name:
-            alt_text = self.fonts["body_bold"].render(f"({fallacy.alt_name})", True, (20, 16, 12))
-            alt_x = title_pos[0] + number_text.get_width() + 16
-            alt_y = title_pos[1] + (number_text.get_height() - alt_text.get_height()) // 2
-            surf.blit(alt_text, (alt_x, alt_y))
-
-        y = card.top + 118
-        for line in wrap_text(fallacy.definition, self.fonts["body"], card.width - 128):
-            label = self.fonts["body"].render(line, True, (40, 34, 28))
-            surf.blit(label, (card.left + 64, y))
-            y += self.fonts["body"].get_height() + 2
-        y += 28
-
-        example_header = self.fonts["body_bold"].render("Example", True, (20, 16, 12))
-        surf.blit(example_header, (card.left + 64, y))
-        y += example_header.get_height() + 10
-
-        examples = game_data.claims_for(self.enemy_name, fid)[:2]
-        for claim in examples:
-            for line in wrap_text(f"“{claim}”", self.fonts["body"], card.width - 128):
-                label = self.fonts["body"].render(line, True, (40, 34, 28))
-                surf.blit(label, (card.left + 64, y))
-                y += self.fonts["body"].get_height() + 2
-            y += 14
+        card, _button = self._add_card_layout(fid)
+        surf.blit(pygame.transform.smoothscale(image, card.size), card)
 
     def _draw_gameplay(self, surf: pygame.Surface) -> None:
         self._draw_hud(surf)
@@ -1094,6 +1262,8 @@ class Game:
             surf.blit(label, (claim_box.left + 24, claim_box.top + 44 + i * 26))
 
         if self.state == "FEEDBACK":
+            if self.review_fallacy_id is not None:
+                self._draw_review_flashcard(surf)
             self._draw_feedback_banner(surf)
 
     def _draw_gameplay_frozen(self, surf: pygame.Surface) -> None:
@@ -1104,17 +1274,25 @@ class Game:
 
     def _draw_feedback_banner(self, surf: pygame.Surface) -> None:
         color = CORRECT_COLOR if self.result_correct else INCORRECT_COLOR
-        total = game_rules.FEEDBACK_HOLD_SECONDS
-        elapsed = max(0.0, total - self.feedback_timer)
-
-        if elapsed < FEEDBACK_ENTER_SECONDS:
-            t = elapsed / FEEDBACK_ENTER_SECONDS
-            x_offset = (1 - t) * VIRTUAL_W
-        elif elapsed > total - FEEDBACK_EXIT_SECONDS:
-            t = (elapsed - (total - FEEDBACK_EXIT_SECONDS)) / FEEDBACK_EXIT_SECONDS
-            x_offset = -t * VIRTUAL_W
+        if self.review_fallacy_id is not None:
+            elapsed = self.review_age
+            if elapsed < FEEDBACK_ENTER_SECONDS:
+                t = elapsed / FEEDBACK_ENTER_SECONDS
+                x_offset = (1 - t) * VIRTUAL_W
+            else:
+                x_offset = 0.0
         else:
-            x_offset = 0.0
+            total = game_rules.FEEDBACK_HOLD_SECONDS
+            elapsed = max(0.0, total - self.feedback_timer)
+
+            if elapsed < FEEDBACK_ENTER_SECONDS:
+                t = elapsed / FEEDBACK_ENTER_SECONDS
+                x_offset = (1 - t) * VIRTUAL_W
+            elif elapsed > total - FEEDBACK_EXIT_SECONDS:
+                t = (elapsed - (total - FEEDBACK_EXIT_SECONDS)) / FEEDBACK_EXIT_SECONDS
+                x_offset = -t * VIRTUAL_W
+            else:
+                x_offset = 0.0
 
         bar_h = 120
         banner = pygame.Rect(int(x_offset), 0, VIRTUAL_W, bar_h)
@@ -1189,55 +1367,218 @@ class Game:
             surf.blit(label, label.get_rect(center=box.center))
             y += 50
 
+    def _book_geometry(self) -> tuple[tuple[int, int], pygame.Rect, pygame.Rect]:
+        bw, bh = self.book_image.get_size()
+        origin = ((VIRTUAL_W - bw) // 2, (VIRTUAL_H - bh) // 2)
+        scale_x = bw / BOOK_CROP.width
+        scale_y = bh / BOOK_CROP.height
+
+        def map_rect(src: pygame.Rect) -> pygame.Rect:
+            return pygame.Rect(
+                origin[0] + round((src.left - BOOK_CROP.left) * scale_x),
+                origin[1] + round((src.top - BOOK_CROP.top) * scale_y),
+                max(1, round(src.width * scale_x)),
+                max(1, round(src.height * scale_y)),
+            )
+
+        return origin, map_rect(LEFT_PAGE_SRC), map_rect(RIGHT_PAGE_SRC)
+
+    def _half_rects(self, origin: tuple[int, int]) -> tuple[pygame.Rect, pygame.Rect]:
+        width, height = self.book_image.get_size()
+        mid = width // 2
+        gutter = self.page_gutter
+        left = pygame.Rect(origin[0], origin[1], mid - gutter, height)
+        right = pygame.Rect(origin[0] + mid + gutter, origin[1], width - mid - gutter, height)
+        return left, right
+
+    def _spread_ids(self, spread: int) -> tuple[int | None, ...]:
+        """Four slots: left top, left bottom, right top, right bottom.
+
+        Cards fill across the book first (left top, right top, then the
+        bottoms) so each picture has two cards on each page.
+        """
+        entries = self._dictionary_entries()
+        starts = self._spread_starts()
+        if not starts:
+            return (None, None, None, None)
+        start = starts[spread % len(starts)]
+        window = entries[start:start + CARDS_PER_SPREAD]
+        placed: list[int | None] = [None, None, None, None]
+        for offset, slot in enumerate((0, 2, 1, 3)):
+            if offset < len(window):
+                placed[slot] = window[offset]
+        return tuple(placed)
+
+    def _page_slots(self, page: pygame.Rect) -> tuple[pygame.Rect, pygame.Rect]:
+        gap = max(6, page.height // 28)
+        slot_h = (page.height - gap) // 2
+        top = pygame.Rect(page.left, page.top, page.width, slot_h)
+        bottom = pygame.Rect(page.left, top.bottom + gap, page.width, page.bottom - (top.bottom + gap))
+        return top, bottom
+
+    def _fitted_rect(self, image: pygame.Surface, slot: pygame.Rect) -> pygame.Rect:
+        scale = min(slot.width / image.get_width(), slot.height / image.get_height())
+        size = (max(1, int(image.get_width() * scale)), max(1, int(image.get_height() * scale)))
+        rect = pygame.Rect(0, 0, size[0], size[1])
+        rect.center = slot.center
+        return rect
+
+    def _blit_fitted(self, surf: pygame.Surface, image: pygame.Surface, slot: pygame.Rect) -> None:
+        rect = self._fitted_rect(image, slot)
+        surf.blit(pygame.transform.smoothscale(image, rect.size), rect)
+
+    def _compose_page(self, card_ids: tuple[int | None, int | None], size: tuple[int, int]) -> pygame.Surface:
+        key = ("page", card_ids, size)
+        cached = self._card_cache.get(key)
+        if cached is not None:
+            return cached
+        page = pygame.Surface(size, pygame.SRCALPHA)
+        local = pygame.Rect(0, 0, size[0], size[1])
+        for fid, slot in zip(card_ids, self._page_slots(local)):
+            if fid is not None:
+                self._blit_fitted(page, self.dictionary_cards[fid], slot)
+        self._card_cache[key] = page
+        return page
+
+    def _turning_sheet(
+        self,
+        side: int,
+        card_ids: tuple[int | None, int | None],
+        half_rect: pygame.Rect,
+        card_page: pygame.Rect,
+    ) -> pygame.Surface:
+        key = ("sheet", side, card_ids, half_rect.size)
+        cached = self._card_cache.get(key)
+        if cached is not None:
+            return cached
+        sheet = self.page_halves[side].copy()
+        local_page = card_page.move(-half_rect.left, -half_rect.top)
+        for fid, slot in zip(card_ids, self._page_slots(local_page)):
+            if fid is not None:
+                self._blit_fitted(sheet, self.dictionary_cards[fid], slot)
+        self._card_cache[key] = sheet
+        return sheet
+
+    def _hinge_blit(
+        self,
+        surf: pygame.Surface,
+        image: pygame.Surface,
+        rect: pygame.Rect,
+        scale: float,
+        hinge: str,
+    ) -> None:
+        scale = max(0.0, min(1.0, scale))
+        if scale <= 0.02:
+            return
+        new_w = max(1, int(rect.width * scale))
+        scaled = pygame.transform.smoothscale(image, (new_w, rect.height))
+        x = rect.left if hinge == "left" else rect.right - new_w
+        surf.blit(scaled, (x, rect.top))
+        shade = pygame.Surface((new_w, rect.height), pygame.SRCALPHA)
+        shade.fill((48, 28, 12, int(110 * (1 - scale))))
+        surf.blit(shade, (x, rect.top))
+
+    def _draw_spread(self, surf: pygame.Surface, spread: int, left_rect: pygame.Rect, right_rect: pygame.Rect) -> None:
+        ids = self._spread_ids(spread)
+        surf.blit(self._compose_page(ids[0:2], left_rect.size), left_rect)
+        surf.blit(self._compose_page(ids[2:4], right_rect.size), right_rect)
+
+    def _draw_stitch(self, surf: pygame.Surface, origin: tuple[int, int]) -> None:
+        mid = self.book_image.get_width() // 2
+        surf.blit(self.book_stitch, (origin[0] + mid - self.page_gutter, origin[1]))
+
+    def _draw_page_turn(self, surf: pygame.Surface, left_rect: pygame.Rect, right_rect: pygame.Rect) -> None:
+        origin, _, _ = self._book_geometry()
+        left_half, right_half = self._half_rects(origin)
+        anim = self.page_anim
+        t = max(0.0, min(1.0, anim["t"]))
+        src_ids = self._spread_ids(anim["from"])
+        dst_ids = self._spread_ids(anim["target"])
+        src_left = self._turning_sheet(0, src_ids[0:2], left_half, left_rect)
+        src_right = self._turning_sheet(1, src_ids[2:4], right_half, right_rect)
+        dst_left = self._turning_sheet(0, dst_ids[0:2], left_half, left_rect)
+        dst_right = self._turning_sheet(1, dst_ids[2:4], right_half, right_rect)
+        if anim["direction"] > 0:
+            surf.blit(self.page_halves[0], left_half)
+            surf.blit(dst_right, right_half)
+            self._draw_stitch(surf, origin)
+            surf.blit(self._compose_page(src_ids[0:2], left_rect.size), left_rect)
+            if t < 0.5:
+                self._hinge_blit(surf, src_right, right_half, 1 - smoothstep(t / 0.5), "left")
+            else:
+                self._hinge_blit(surf, dst_left, left_half, smoothstep((t - 0.5) / 0.5), "right")
+        else:
+            surf.blit(dst_left, left_half)
+            surf.blit(self.page_halves[1], right_half)
+            self._draw_stitch(surf, origin)
+            surf.blit(self._compose_page(src_ids[2:4], right_rect.size), right_rect)
+            if t < 0.5:
+                self._hinge_blit(surf, src_left, left_half, 1 - smoothstep(t / 0.5), "right")
+            else:
+                self._hinge_blit(surf, dst_right, right_half, smoothstep((t - 0.5) / 0.5), "left")
+
     def _draw_dictionary(self, surf: pygame.Surface) -> None:
-        overlay = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
-        overlay.fill((10, 6, 4, 160))
-        surf.blit(overlay, (0, 0))
+        origin, left_rect, right_rect = self._book_geometry()
+        turning = self.page_anim is not None
+        if not turning:
+            surf.blit(self.book_image, origin)
 
-        book = pygame.Rect(260, 100, 760, 500)
-        draw_paper(surf, book, tilt=-1)
-
-        entries = sorted(self.progress.dictionary_ids)
-        title = self.fonts["title"].render("Fallacy Dictionary", True, TEXT_DARK)
-        surf.blit(title, title.get_rect(center=(book.centerx, book.top + 44)))
-
+        entries = self._dictionary_entries()
         if not entries:
             empty = self.fonts["body"].render("No fallacies collected yet.", True, TEXT_DARK)
-            surf.blit(empty, empty.get_rect(center=book.center))
+            surf.blit(empty, empty.get_rect(center=self.book_image.get_rect(topleft=origin).center))
             return
 
-        self.dictionary_page %= len(entries)
-        fid = entries[self.dictionary_page]
-        fallacy = FALLACIES_BY_ID[fid]
+        spreads = self._spread_count()
+        self.dictionary_page %= spreads
+        if not turning:
+            self._draw_spread(surf, self.dictionary_page, left_rect, right_rect)
+            shown = self.dictionary_page
+        else:
+            self._draw_page_turn(surf, left_rect, right_rect)
+            shown = self.page_anim["from"]
 
-        y = book.top + 110
-        name_text = fallacy.name + (f" ({fallacy.alt_name})" if fallacy.alt_name else "")
-        name = self.fonts["large"].render(name_text, True, TEXT_DARK)
-        surf.blit(name, (book.left + 50, y))
-        y += 60
-
-        for line in wrap_text(fallacy.definition, self.fonts["body"], book.width - 100):
-            label = self.fonts["body"].render(line, True, TEXT_DARK)
-            surf.blit(label, (book.left + 50, y))
-            y += self.fonts["body"].get_height() + 2
-        y += 16
-
-        examples = game_data.claims_for(game_data.enemy_for_fallacy(fid), fid)[:2]
-        if examples:
-            header = self.fonts["body_bold"].render("Example", True, TEXT_DARK)
-            surf.blit(header, (book.left + 50, y))
-            y += header.get_height() + 8
-            for claim in examples:
-                for line in wrap_text(f"“{claim}”", self.fonts["body"], book.width - 100):
-                    label = self.fonts["body"].render(line, True, TEXT_DARK)
-                    surf.blit(label, (book.left + 50, y))
-                    y += self.fonts["body"].get_height() + 2
-                y += 14
-
+        shown_ids = [fid for fid in self._spread_ids(shown) if fid is not None]
+        positions = [entries.index(fid) + 1 for fid in shown_ids]
         page_label = self.fonts["small"].render(
-            f"{self.dictionary_page + 1} / {len(entries)}", True, TEXT_DARK
+            f"{min(positions)}–{max(positions)} / {len(entries)}", True, TEXT_DARK
         )
-        surf.blit(page_label, page_label.get_rect(center=(book.centerx, book.bottom - 30)))
+        book_rect = self.book_image.get_rect(topleft=origin)
+        surf.blit(page_label, page_label.get_rect(midbottom=(book_rect.centerx, book_rect.bottom - 42)))
+        if self.zoomed_card is not None:
+            self._draw_zoomed_card(surf)
+
+    def _draw_zoomed_card(self, surf: pygame.Surface) -> None:
+        image = self.detail_cards.get(self.zoomed_card)
+        if image is None:
+            return
+        dim = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
+        dim.fill((16, 10, 8, 150))
+        surf.blit(dim, (0, 0))
+        fit = min(980 / image.get_width(), 620 / image.get_height())
+        scale = 0.72 + 0.28 * smoothstep(self.zoom_t)
+        width = max(1, int(image.get_width() * fit * scale))
+        height = max(1, int(image.get_height() * fit * scale))
+        scaled = pygame.transform.smoothscale(image, (width, height))
+        surf.blit(scaled, scaled.get_rect(center=(VIRTUAL_W // 2, VIRTUAL_H // 2)))
+
+    def _draw_review_flashcard(self, surf: pygame.Surface) -> None:
+        image = self.detail_cards.get(self.review_fallacy_id)
+        if image is None:
+            return
+        if self.review_age < FEEDBACK_ENTER_SECONDS:
+            scale = 0.86 + 0.14 * (self.review_age / FEEDBACK_ENTER_SECONDS)
+        else:
+            scale = 1.0
+
+        dest = self._fitted_card(image, (900, 420), (VIRTUAL_W // 2, 510))
+        dest = pygame.Rect(0, 0, max(1, int(dest.width * scale)), max(1, int(dest.height * scale)))
+        dest.center = (VIRTUAL_W // 2, 510)
+        scaled = pygame.transform.smoothscale(image, dest.size)
+        shadow = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (20, 10, 6, 70), shadow.get_rect(), border_radius=18)
+        surf.blit(shadow, dest.move(0, 8))
+        surf.blit(scaled, dest)
 
     def _draw_settings(self, surf: pygame.Surface) -> None:
         paper = SETTINGS_PAPER_RECT
