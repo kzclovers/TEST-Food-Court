@@ -13,6 +13,7 @@ import asyncio
 from functools import lru_cache
 import math
 import random
+import sys
 from pathlib import Path
 
 import pygame
@@ -2579,8 +2580,13 @@ async def main() -> None:
     pygame.display.set_caption("Food Court")
     # Let SDL scale the virtual canvas and synchronize presentation to the
     # display when the active renderer supports it.
-    display_flags = pygame.RESIZABLE | pygame.SCALED
-    screen = pygame.display.set_mode((VIRTUAL_W, VIRTUAL_H), display_flags, vsync=1)
+    if sys.platform == "emscripten":
+        # pygbag CSS-scales the canvas; SCALED/RESIZABLE/vsync fail to create
+        # a renderer there (newer platform_wasm strips them for this reason).
+        screen = pygame.display.set_mode((VIRTUAL_W, VIRTUAL_H))
+    else:
+        display_flags = pygame.RESIZABLE | pygame.SCALED
+        screen = pygame.display.set_mode((VIRTUAL_W, VIRTUAL_H), display_flags, vsync=1)
     clock = pygame.time.Clock()
     canvas = pygame.Surface((VIRTUAL_W, VIRTUAL_H))
 
