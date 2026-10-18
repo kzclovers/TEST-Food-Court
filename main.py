@@ -87,11 +87,11 @@ BOOK_MAX = (1080, 690)
 # The kitchen art is 4:3, so it is cover-scaled to 16:9 and cropped from the
 # top (the bottom edge stays put). These anchors are in that cropped space:
 # the table tops run from y≈434 (back edge) to y≈541 (front edge).
-CHEF_ANCHOR = (640, 462)
+CHEF_ANCHOR = (640, VIRTUAL_H // 2 + 300 )
 TOMATO_ANCHOR = (175, 496)
 ENEMY_ANCHOR = (1100, 496)
 CHARACTER_SIZE = 230
-CHEF_SIZE = 400
+CHEF_SIZE = 450
 
 # Gameplay layout. The claim sits in a box between the two tables and the
 # answer papers float in the open area above it, never underneath it.
@@ -99,14 +99,22 @@ DIALOGUE_RECT = pygame.Rect(290, 552, 700, 156)
 PAPER_BOUNDS = pygame.Rect(300, 232, 680, DIALOGUE_RECT.top - 20 - 232)
 
 # Fighting-game HUD: two health bars meet at a centre timer medallion.
-HUD_BAR_LEFT = pygame.Rect(124, 46, 420, 36)
-HUD_BAR_RIGHT = pygame.Rect(VIRTUAL_W - 124 - 420, 46, 420, 36)
+HUD_BAR_LEFT = pygame.Rect(110, 28, 420, 72)
+HUD_BAR_RIGHT = pygame.Rect(VIRTUAL_W - 110 - 420, 28, 420, 72)
 HUD_BAR_SLANT = 16
-HUD_PORTRAIT_D = 84
-HUD_PORTRAIT_LEFT = (64, 64)
-HUD_PORTRAIT_RIGHT = (VIRTUAL_W - 64, 64)
+HUD_PORTRAIT_D = 80
+HUD_PORTRAIT_LEFT = (60, 44)
+HUD_PORTRAIT_RIGHT = (VIRTUAL_W - 60, 44)
 HUD_TIMER_CENTER = (VIRTUAL_W // 2, 64)
 HUD_TIMER_RADIUS = 38
+GAMEPLAY_PAN_PIXELS = 40
+GAMEPLAY_PAN_SPEED = 200.0
+FOREGROUND_PAN_SPEED = 90.0
+CHEF_PAN_SPEED = 90.0
+# Foreground props and characters move farther than the distant room art,
+# creating a parallax depth cue while keeping every layer moving together.
+FOREGROUND_PAN_RATIO = 0.5
+CHEF_PAN_RATIO = 0.5
 
 LEVEL_TILE_SIZE = (170, 280)
 # Six level cards uniformly centered across the screen
@@ -116,8 +124,10 @@ LEVEL_CIRCLE_RECTS = [
 LEVEL_PORTRAIT_D = 116
 INFINITE_BUTTON_RECT = pygame.Rect(330, 580, 620, 100)
 RETURN_BUTTON_RECT = pygame.Rect(32, 28, 124, 48)
-PAUSE_BUTTON_RECT = pygame.Rect(VIRTUAL_W - 280, 654, 44, 44)
+PAUSE_BUTTON_RECT = pygame.Rect(HUD_TIMER_CENTER[0] + 50, 40, 44, 44)
 PAUSE_POPUP_RECT = pygame.Rect(460, 196, 360, 320)
+DICTIONARY_HUD_RECT = pygame.Rect(HUD_TIMER_CENTER[0] - 100, 40, 44, 44)
+
 INFINITE_SAVE_KEY = 0  # infinite mode is one shared run, not per level
 ENEMY_SHEETS = {
     "Vegetable Peeler": "Peeler_SpriteSheet.png",
@@ -141,7 +151,6 @@ SETTINGS_SLIDER_RECTS = [pygame.Rect(r.left + 8, r.bottom - 12, r.width - 16, 8)
 # Music track per level; infinite mode uses its own theme.
 LEVEL_MUSIC = {1: "veggie_skinner", 2: "veggie_skinner", 3: "knife", 4: "knife", 5: "boiling_pot", 6: "boiling_pot"}
 LEVEL_MUSIC_STATES = ("TEACHING", "GAMEPLAY", "FEEDBACK", "GAVEL")
-REVIEW_CONTINUE_RECT = pygame.Rect(VIRTUAL_W // 2 - 110, 642, 220, 52)
 
 # Sprite bounds in HealthBar_SpriteSheet.png, ordered left to right from the
 # full carrot to the most depleted stub.
@@ -153,6 +162,15 @@ HEALTH_ICON_RECTS = [
     (8563, 287, 1227, 442),
     (10202, 290, 949, 443),
 ]
+
+TYPEWRITER_CHARS_PER_SEC = 32.0
+
+# Dialogue scripts loaded from game_data.py
+JUDGE_OPENINGS = game_data.JUDGE_OPENINGS
+JUDGE_INFINITE_OPENING = game_data.JUDGE_INFINITE_OPENING
+JUDGE_CORRECT_REACTIONS = game_data.JUDGE_CORRECT_REACTIONS
+JUDGE_WRONG_REACTIONS = game_data.JUDGE_WRONG_REACTIONS
+JUDGE_WIN_STATEMENT = game_data.JUDGE_WIN_STATEMENT
 
 
 # --- asset helpers -------------------------------------------------------
@@ -198,6 +216,18 @@ def cover_scale(img: pygame.Surface, size: tuple[int, int], anchor_y: float = 0.
     return scaled.subsurface(crop).copy()
 
 
+def add_vertical_overscan(img: pygame.Surface, margin: int) -> pygame.Surface:
+    """Pad an image vertically so small camera pans do not expose blank edges."""
+    expanded = pygame.Surface((img.get_width(), img.get_height() + margin * 2), pygame.SRCALPHA)
+    top_row = img.subsurface(pygame.Rect(0, 0, img.get_width(), 1))
+    bottom_row = img.subsurface(pygame.Rect(0, img.get_height() - 1, img.get_width(), 1))
+    for y in range(margin):
+        expanded.blit(top_row, (0, y))
+        expanded.blit(bottom_row, (0, margin + img.get_height() + y))
+    expanded.blit(img, (0, margin))
+    return expanded
+
+
 def wrap_text(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
     words = text.split(" ")
     lines: list[str] = []
@@ -212,6 +242,26 @@ def wrap_text(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
     if current:
         lines.append(current)
     return lines
+
+
+def wrap_text_progressive(full_text: str, chars_to_show: int, font: pygame.font.Font, max_width: int) -> list[str]:
+    """Wraps the full string to lock in consistent line breaks, revealing characters progressively without jumping."""
+    full_lines = wrap_text(full_text, font, max_width)
+    result: list[str] = []
+    remaining = chars_to_show
+    for line in full_lines:
+        if remaining <= 0:
+            break
+        # +1 accounts for the space between wrapped lines in full text
+        line_cost = len(line) + 1
+        if remaining >= len(line):
+            result.append(line)
+            remaining -= line_cost
+        else:
+            result.append(line[:remaining])
+            remaining = 0
+            break
+    return result
 
 
 @lru_cache(maxsize=256)
@@ -703,6 +753,10 @@ class Game:
         self.fonts["title_bold"] = pygame.font.Font(str(font_dir / "Nunito-ExtraBold.ttf"), 54)
         self.fonts["body_bold"] = pygame.font.Font(str(font_dir / "Nunito-Bold.ttf"), 28)
         self.fonts["large_bold"] = pygame.font.Font(str(font_dir / "Nunito-Bold.ttf"), 40)
+        self.dialogue_fonts = [
+            pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), size)
+            for size in (28, 26, 24, 22, 20, 18)
+        ]
         self.banner_cache: dict[tuple[str, tuple[int, int, int]], pygame.Surface] = {}
         self.banner_font = pygame.font.Font(str(font_dir / "Nunito-ExtraBold.ttf"), 84)
 
@@ -716,7 +770,6 @@ class Game:
         self.zoom_t = 1.0
         self._card_cache: dict = {}
         self.review_fallacy_id: int | None = None
-        self.review_clicks = 0
         self.review_age = 0.0
         self.show_reset_confirm = False
         self.pre_settings_state = "MENU"
@@ -765,19 +818,31 @@ class Game:
         self.infinite_is_best = False
         self.dialogue_phase = "DONE"
         self.dialogue_timer = 0.0
+        self.dialogue_speaker = ""
+        self.dialogue_text = ""
+        self.dialogue_char_count = 0.0
+        self.dialogue_level_opened = False
+        self.camera_y = 0.0
+        self.foreground_camera_y = 0.0
+        self.chef_camera_y = 0.0
 
     # -- asset loading ---------------------------------------------------
 
     def _load_assets(self) -> None:
-        raw_bg = load_image("Background.png", (VIRTUAL_W, VIRTUAL_H), (60, 38, 26))
-        self.bg = cover_scale(raw_bg, (VIRTUAL_W, VIRTUAL_H), anchor_y=1.0)
+        raw_bg = load_image("Background.png", (VIRTUAL_W, VIRTUAL_H - 400), (60, 38, 26))
+        self.bg = cover_scale(raw_bg, (VIRTUAL_W, VIRTUAL_H), anchor_y=0.0)
+        self.bg_gameplay = self.bg.copy()
+        light_overlay = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
+        light_overlay.fill((255, 255, 200, 32))
+        self.bg_gameplay.blit(light_overlay, (0, 0))
+        self.bg_pan = add_vertical_overscan(self.bg_gameplay, GAMEPLAY_PAN_PIXELS)
         # Each moving answer paper gets one randomly chosen food-themed backdrop.
         self.fallacy_paper_backgrounds = [
             load_image(f"bg_fallacies/{name}_bg.png")
             for name in ("bread", "lettuce", "cheese", "bacon")
         ]
         self.bg_faded = cover_scale(
-            load_image("background_faded.png", (VIRTUAL_W, VIRTUAL_H), (90, 60, 40)), (VIRTUAL_W, VIRTUAL_H)
+            load_image("background_faded.png", (VIRTUAL_W, VIRTUAL_H - 200  ), (90, 60, 40)), (VIRTUAL_W, VIRTUAL_H)
         )
         self.logo = load_image("LOGO_food_court.png", (600, 460), (214, 122, 54))
         self.logo_small = pygame.transform.smoothscale(
@@ -789,6 +854,9 @@ class Game:
         # Align tables with the exact same cover crop as Background.png
         raw_tables = load_image("tables.png", (VIRTUAL_W, VIRTUAL_H), (0, 0, 0, 0))
         self.tables = cover_scale(raw_tables, (VIRTUAL_W, VIRTUAL_H), anchor_y=1.0)
+        self.tables_pan = add_vertical_overscan(
+            self.tables, round(GAMEPLAY_PAN_PIXELS * FOREGROUND_PAN_RATIO)
+        )
         self.dictionary_icon = load_image("dictionary icon.PNG", (48, 64), (214, 122, 54))
         book = load_image("Untitled_Artwork 9.png", BOOK_CROP.size, (255, 247, 206))
         if book.get_width() >= BOOK_CROP.right and book.get_height() >= BOOK_CROP.bottom:
@@ -831,9 +899,12 @@ class Game:
         self.peeler = Peeler(ASSET_DIR / "Peeler_SpriteSheet.png")
         self.peeler_frames = self.peeler.frames
         self.tomato = Tomato(ASSET_DIR / "Tomato_SpriteSheet.png")
+        tomato_order = [1, 0, *range(2, len(self.tomato.frames))]
+        self.tomato.frames = [self.tomato.frames[index] for index in tomato_order]
         self.chef = Chef(path=ASSET_DIR / "Chef_SpriteSheet.png")
         self.tomato_frames = self.tomato.frames
         self.chef_frames = self.chef.frames
+        self.smashed_tomato = load_image("smashed tomato.png", (160, 160), (180, 50, 40, 0))
 
         # The Peeler class only wraps a five-frame strip, so it draws every enemy.
         self.enemies = {"Vegetable Peeler": self.peeler}
@@ -888,13 +959,19 @@ class Game:
         self.page_anim = None
         self.zoomed_card = None
         self.review_fallacy_id = None
-        self.review_clicks = 0
         self.review_age = 0.0
         self.show_reset_confirm = False
         self.paused = False
         self.fail_reason = ""
         self.dialogue_phase = "DONE"
         self.dialogue_timer = 0.0
+        self.dialogue_speaker = ""
+        self.dialogue_text = ""
+        self.dialogue_char_count = 0.0
+        self.dialogue_level_opened = False
+        self.camera_y = 0.0
+        self.foreground_camera_y = 0.0
+        self.chef_camera_y = 0.0
 
     def start_level(self, level: int) -> None:
         """Main level: meet all three new fallacies, warm up, then fight."""
@@ -1007,25 +1084,71 @@ class Game:
             self.timer_max = game_rules.QUESTION_SECONDS
         self.timer = self.timer_max
         self.answered = False
-        self.dialogue_phase = "CENTER"
-        self.dialogue_timer = DIALOGUE_CENTER_SECONDS
+
+        if not self.dialogue_level_opened:
+            self.dialogue_level_opened = True
+            opening_text = JUDGE_INFINITE_OPENING if self.infinite else JUDGE_OPENINGS.get(self.level, JUDGE_OPENINGS[1])
+            self._set_dialogue("Judge", opening_text, next_phase="OPPONENT_INTRO")
+        else:
+            self._set_dialogue(self.enemy_name or "Opponent", self.current_claim, next_phase="DONE")
         self.state = "GAMEPLAY"
 
-    def _advance_dialogue(self, dt: float) -> None:
-        """Center claim text for a beat, slide it down, then reveal papers.
+    def _set_dialogue(self, speaker: str, text: str, next_phase: str) -> None:
+        self.audio.stop_sfx("text")
+        self.dialogue_speaker = speaker
+        self.dialogue_text = text
+        self.dialogue_char_count = 0.0
+        self.dialogue_target_phase = next_phase
+        self.dialogue_phase = "CENTER"
+        self.dialogue_timer = DIALOGUE_CENTER_SECONDS
 
-        The answer timer only starts once the papers are built, in the
-        DONE phase (see update()).
-        """
+    def _advance_dialogue(self, dt: float) -> None:
         self.dialogue_timer -= dt
-        if self.dialogue_timer > 0:
+        self._advance_dialogue_text(dt)
+
+        if self.dialogue_timer <= 0:
+            if self.dialogue_phase == "CENTER":
+                self.dialogue_phase = "MOVING"
+                self.dialogue_timer = DIALOGUE_MOVE_SECONDS
+            elif self.dialogue_phase == "MOVING":
+                # Keep both Judge and opponent lines on screen until the
+                # player finishes the dialogue and clicks to continue.
+                self.dialogue_phase = "WAIT_CLICK"
+
+    def _advance_dialogue_text(self, dt: float) -> None:
+        full_len = len(self.dialogue_text)
+        if self.dialogue_char_count >= full_len:
+            self.audio.stop_sfx("text")
             return
-        if self.dialogue_phase == "CENTER":
-            self.dialogue_phase = "MOVING"
-            self.dialogue_timer = DIALOGUE_MOVE_SECONDS
-        elif self.dialogue_phase == "MOVING":
+        self.audio.play_sfx_loop("text")
+        self.dialogue_char_count = min(
+            float(full_len), self.dialogue_char_count + dt * TYPEWRITER_CHARS_PER_SEC
+        )
+        if self.dialogue_char_count >= full_len:
+            self.audio.stop_sfx("text")
+
+    def _dismiss_dialogue(self) -> None:
+        """Called when player clicks through dialogue or tests advance."""
+        full_len = len(self.dialogue_text)
+        if int(self.dialogue_char_count) < full_len:
+            # Complete the typing animation immediately on first click
+            self.dialogue_char_count = float(full_len)
+            self.audio.stop_sfx("text")
+            return
+
+        # Advance to next phase
+        if self.dialogue_target_phase == "ACTIVE":
+            self.audio.stop_sfx("text")
+            self.after_feedback()
+            return
+        if self.dialogue_speaker == "Judge":
+            # The Judge's intro click starts the opponent's line. Papers wait
+            # for a separate click after that line has finished typing.
+            self._set_dialogue(self.enemy_name or "Opponent", self.current_claim, next_phase="DONE")
+        elif self.dialogue_phase in ("CENTER", "MOVING", "WAIT_CLICK", "OPPONENT_INTRO", "DONE"):
             self.dialogue_phase = "DONE"
-            self._build_papers(self.current_fallacy_id)
+            if not self.papers and self.current_fallacy_id:
+                self._build_papers(self.current_fallacy_id)
             self.timer = self.timer_max
 
     def _build_papers(self, correct_id: int) -> None:
@@ -1045,7 +1168,7 @@ class Game:
         ]
 
     def handle_paper_click(self, pos: tuple[int, int]) -> bool:
-        if self.state != "GAMEPLAY" or self.answered or self.dialogue_phase != "DONE":
+        if self.state != "GAMEPLAY" or self.answered or self.dialogue_phase not in ("DONE", "ACTIVE"):
             return False
         for paper in self.papers:
             if paper.rect().collidepoint(pos):
@@ -1055,6 +1178,7 @@ class Game:
 
     def resolve_answer(self, correct: bool, timeout: bool) -> None:
         self.answered = True
+        self.chef.play()
         self.papers = []
         fid = self.current_fallacy_id
         assert fid is not None
@@ -1078,7 +1202,6 @@ class Game:
             self.enemy_flash = FLASH_DURATION
             self.result_label = "CORRECT"
             self.review_fallacy_id = None
-            self.review_clicks = 0
             self.audio.play_sfx("correct")
         else:
             # The warm-up is practice: misses repeat the card but cost nothing.
@@ -1089,7 +1212,6 @@ class Game:
             self.result_label = "TIME OUT" if timeout else "INCORRECT"
             # Show the matching dictionary card. It is not collected.
             self.review_fallacy_id = fid
-            self.review_clicks = 0
             self.review_age = 0.0
             self.audio.play_sfx("incorrect")
 
@@ -1098,31 +1220,32 @@ class Game:
             self.toasts.append([f"{FALLACIES_BY_ID[fid].name} mastered!", TOAST_DURATION])
             self.audio.play_sfx("mastery")
 
+        # Judge reacts to player's answer
+        if correct:
+            reaction = self.rng.choice(JUDGE_CORRECT_REACTIONS)
+        else:
+            reaction = self.rng.choice(JUDGE_WRONG_REACTIONS)
+        self._set_dialogue("Judge", reaction, next_phase="ACTIVE")
+        self.dialogue_phase = "WAIT_CLICK"
+        self.dialogue_timer = 0.0
+
         self.feedback_timer = game_rules.FEEDBACK_HOLD_SECONDS
         self.question_index += 1
         self.state = "FEEDBACK"
 
-    def _ack_review_card(self) -> None:
-        """A wrong-answer card stays up until the player clicks it twice."""
-        if self.state != "FEEDBACK" or self.review_fallacy_id is None:
-            return
-        self.review_clicks += 1
-        if self.review_clicks >= 2:
-            self.after_feedback()
-
     def after_feedback(self) -> None:
         self.review_fallacy_id = None
-        self.review_clicks = 0
         if self.health <= 0:
             if self.infinite:
                 self.finish_infinite()
             else:
-                self.fail_reason = "Health depleted - try again!."
+                self.fail_reason = "You were turned into puree - try again!."
                 self.start_gavel("LEVEL_FAILED")
             return
 
         if not self.infinite and self.enemy_health <= 0:
             self.progress.complete_level(self.level)
+            self.toasts.append(["Judge: " + JUDGE_WIN_STATEMENT, TOAST_DURATION * 2])
             self.start_gavel("LEVEL_COMPLETE")
             return
 
@@ -1156,6 +1279,7 @@ class Game:
     def _pause(self) -> None:
         if self._can_pause():
             self.paused = True
+            self.audio.stop_sfx("text")
 
     def _resume(self) -> None:
         self.paused = False
@@ -1185,12 +1309,39 @@ class Game:
         track = self._desired_music()
         if track is not None:
             self.audio.play_music(track)
+        if self.state in ("GAMEPLAY", "FEEDBACK", "GAVEL"):
+            target_camera_y = (
+                GAMEPLAY_PAN_PIXELS if self.dialogue_speaker == "Judge"
+                else -GAMEPLAY_PAN_PIXELS if self.dialogue_speaker else 0.0
+            )
+        else:
+            target_camera_y = 0.0
+        target_foreground_y = target_camera_y * FOREGROUND_PAN_RATIO
+        target_chef_camera_y = -target_camera_y
+        camera_step = GAMEPLAY_PAN_SPEED * dt
+        if self.camera_y < target_camera_y:
+            self.camera_y = min(target_camera_y, self.camera_y + camera_step)
+        else:
+            self.camera_y = max(target_camera_y, self.camera_y - camera_step)
+        foreground_step = FOREGROUND_PAN_SPEED * dt
+        if self.foreground_camera_y < target_foreground_y:
+            self.foreground_camera_y = min(target_foreground_y, self.foreground_camera_y + foreground_step)
+        else:
+            self.foreground_camera_y = max(target_foreground_y, self.foreground_camera_y - foreground_step)
+        chef_step = CHEF_PAN_SPEED * dt
+        if self.chef_camera_y < target_chef_camera_y:
+            self.chef_camera_y = min(target_chef_camera_y, self.chef_camera_y + chef_step)
+        else:
+            self.chef_camera_y = max(target_chef_camera_y, self.chef_camera_y - chef_step)
         if self.paused:
             return
-        if self.state == "GAMEPLAY" and not self.answered:
-            if self.dialogue_phase != "DONE":
+        self.chef.update(dt)
+        if self.state == "GAMEPLAY" and (not self.answered or self.dialogue_target_phase == "ACTIVE"):
+            if self.dialogue_phase not in ("DONE", "ACTIVE"):
                 self._advance_dialogue(dt)
             else:
+                if self.dialogue_phase == "DONE":
+                    self._advance_dialogue_text(dt)
                 if self._timer_running():
                     self.timer -= dt
                 if self.timer <= 0:
@@ -1200,12 +1351,11 @@ class Game:
                     for paper in self.papers:
                         paper.update(dt)
         elif self.state == "FEEDBACK":
+            self._advance_dialogue_text(dt)
             if self.review_fallacy_id is not None:
                 self.review_age += dt
             else:
-                self.feedback_timer -= dt
-                if self.feedback_timer <= 0:
-                    self.after_feedback()
+                self.feedback_timer = max(0.0, self.feedback_timer - dt)
         elif self.state == "GAVEL":
             self.gavel_timer -= dt
             if self.gavel_timer <= 0:
@@ -1242,7 +1392,7 @@ class Game:
     def _tomato_frame(self) -> pygame.Surface:
         if self.tomato_flash > 0:
             return self.tomato_frames[min(4, len(self.tomato_frames) - 1)]
-        idx = min(3, game_rules.HEALTH_MAX - self.health)
+        idx = min(3, max(0, game_rules.HEALTH_MAX - self.health))
         return self.tomato_frames[min(idx, len(self.tomato_frames) - 1)]
 
     # -- button layout ---------------------------------------------------
@@ -1268,9 +1418,10 @@ class Game:
 
         if self._can_pause():
             self.buttons.append(Button(PAUSE_BUTTON_RECT, "", self._pause, style="icon", icon="pause"))
+            self.buttons.append(Button(DICTIONARY_HUD_RECT, "", self._open_dictionary, style="icon", icon="book"))
 
         if self.state in ("LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
-            self.buttons.append(Button(pygame.Rect(1196, 18, 56, 56), "", self._open_dictionary,
+            self.buttons.append(Button(pygame.Rect(1006, 18, 56, 56), "", self._open_dictionary,
                                        style="icon", icon="book"))
             self.buttons.append(Button(pygame.Rect(1126, 18, 56, 56), "", self._open_settings,
                                        style="icon", icon="gear"))
@@ -1283,8 +1434,6 @@ class Game:
             self.buttons.append(Button(pygame.Rect(cx - 130, top + 62, 260, 50), "Instructions", self._open_how_to_play, style="todo", radius=10))
             self.buttons.append(Button(pygame.Rect(cx - 130, top + 124, 260, 50), "Dictionary", self._open_dictionary, style="todo", radius=10))
             self.buttons.append(Button(pygame.Rect(cx - 130, top + 186, 260, 50), "Settings", self._open_settings, style="todo", radius=10))
-            # Keep hidden Enter button so any automated tests or key hits work seamlessly
-            self.buttons.append(Button(pygame.Rect(cx - 130, top, 260, 50), "Enter", self._open_level_select, style="hidden"))
         elif self.state == "HOW_TO_PLAY":
             self.buttons.append(Button(RETURN_BUTTON_RECT, "Back", self._go_menu, style="secondary", radius=12))
         elif self.state == "LEVEL_SELECT":
@@ -1303,13 +1452,6 @@ class Game:
                 self.buttons.append(
                     Button(button_rect, "Add To Your Dictionary", lambda fid=fid: self.on_add_to_dictionary(fid), radius=14)
                 )
-        elif self.state == "FEEDBACK" and self.review_fallacy_id is not None:
-            self.buttons.append(
-                Button(REVIEW_CONTINUE_RECT, "Continue", self._ack_review_card, radius=12)
-            )
-            self.buttons.append(
-                Button(pygame.Rect(0, 0, VIRTUAL_W, VIRTUAL_H), "", self._ack_review_card, style="hidden")
-            )
         elif self.state in ("LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
             home = pygame.Rect(460, 440, 160, 52)
             other = pygame.Rect(640, 440, 180, 52)
@@ -1322,8 +1464,8 @@ class Game:
                 self.buttons.append(Button(other, "Play Again", self._replay_infinite, radius=12))
 
     def _layout_dictionary_buttons(self) -> None:
-        self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._close_dictionary,
-                                   style="icon", icon="return"))
+        self.buttons.append(Button(RETURN_BUTTON_RECT, "Back", self._close_dictionary, style="secondary", radius=12))
+
         if self.zoomed_card is not None:
             self.buttons.append(
                 Button(pygame.Rect(0, 0, VIRTUAL_W, VIRTUAL_H), "", self._close_zoom, style="hidden")
@@ -1494,18 +1636,15 @@ class Game:
 
     def handle_press(self, pos: tuple[int, int]) -> bool:
         """Handle press-time interactions and report whether one consumed it."""
-        if self.state == "GAMEPLAY":
-            # Answer papers move every frame, so hit-test at mouse-down before
-            # they can drift away from under the pointer before mouse-up.
-            return self.handle_paper_click(pos)
-        if self.state != "SETTINGS":
-            return False
-        for i, row in enumerate(SETTINGS_ROW_RECTS):
-            if row.inflate(0, 10).collidepoint(pos):
-                self.dragging_slider = i
-                self._set_slider(i, pos[0])
-                return True
-        return False
+        if self.state == "SETTINGS":
+            for i, row in enumerate(SETTINGS_ROW_RECTS):
+                if row.inflate(0, 10).collidepoint(pos):
+                    self.dragging_slider = i
+                    self._set_slider(i, pos[0])
+                    return True
+        # Route buttons, dialogue advances, and answer papers through one
+        # press-time path so the matching release cannot count as a second click.
+        return self.handle_click(pos)
 
     def handle_drag(self, pos: tuple[int, int]) -> None:
         if self.dragging_slider is not None:
@@ -1574,7 +1713,13 @@ class Game:
                 self.audio.play_sfx("click")
                 button.action()
                 return True
+        if self.state == "FEEDBACK":
+            self._dismiss_dialogue()
+            return True
         if not self.paused and not self.show_dictionary and self.state != "SETTINGS":
+            if self.state == "GAMEPLAY" and self.dialogue_phase in ("WAIT_CLICK", "OPPONENT_INTRO", "POST_VERDICT_WIN", "POST_VERDICT_LOSE"):
+                self._dismiss_dialogue()
+                return True
             return self.handle_paper_click(pos)
         return False
 
@@ -1589,7 +1734,12 @@ class Game:
 
         faded_states = ("MENU", "HOW_TO_PLAY", "LEVEL_SELECT", "SETTINGS",
                         "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS")
-        surf.blit(self.bg_faded if self.state in faded_states else self.bg, (0, 0))
+        gameplay_states = ("GAMEPLAY", "FEEDBACK", "GAVEL")
+        if self.state in gameplay_states:
+            source_y = GAMEPLAY_PAN_PIXELS - round(self.camera_y)
+            surf.blit(self.bg_pan, (0, 0), pygame.Rect(0, source_y, VIRTUAL_W, VIRTUAL_H))
+        else:
+            surf.blit(self.bg_faded if self.state in faded_states else self.bg, (0, 0))
         if self.state in ("LEVEL_SELECT", "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
             logo = self.logo_small_faded if self.state == "LEVEL_SELECT" else self.logo_small
             surf.blit(logo, logo.get_rect(bottomright=(VIRTUAL_W - 24, VIRTUAL_H - 16)))
@@ -1622,6 +1772,11 @@ class Game:
             self._draw_pause_popup(surf)
 
         self._draw_ui_buttons(surf)
+
+        # Draw the answer banner last so review cards, toasts, and controls
+        # cannot cover it during the feedback state.
+        if self.state == "FEEDBACK":
+            self._draw_feedback_banner(surf)
 
     def _is_hovered(self, rect: pygame.Rect) -> bool:
         return rect.collidepoint(self.mouse_pos)
@@ -1690,7 +1845,7 @@ class Game:
         y = panel.top + 94
         for title, desc in steps:
             # Bullet badge
-            chip_rect = pygame.Rect(panel.left + 48, y, 220, 28)
+            chip_rect = pygame.Rect(panel.left + 48, y, 420, 45)
             draw_rounded_rect(surf, chip_rect, SURFACE_ALT, radius=6, border=LINE, border_width=1)
             draw_text(surf, self.fonts["body_bold"], title, PRIMARY, midleft=(chip_rect.left + 12, chip_rect.centery))
             
@@ -1806,29 +1961,28 @@ class Game:
         left_track = HUD_BAR_LEFT
         right_track = HUD_BAR_RIGHT
 
-        # Keep the empty track light so the transparent sprite sheet doesn't
-        # read as a black-backed bar.
-        draw_shadow(surf, left_track, radius=8, offset=(0, 3), alpha=70, blur=6)
-        draw_shadow(surf, right_track, radius=8, offset=(0, 3), alpha=70, blur=6)
-        draw_rounded_rect(surf, left_track, SURFACE_ALT, radius=8, border=LINE_STRONG, border_width=2)
-        draw_rounded_rect(surf, right_track, SURFACE_ALT, radius=8, border=LINE_STRONG, border_width=2)
+        # Select the matching sprite-sheet frame for each current health value.
+        # The frames are stretched into the enlarged slots; no empty track is
+        # drawn behind them.
+        player_idx = min(len(self.health_frames) - 1, max(0, game_rules.HEALTH_MAX - self.health))
+        left_sprite = pygame.transform.flip(self.health_frames[player_idx], True, False)
+        target_h = bar_h
+        left_w = max(1, round(left_sprite.get_width() * target_h / left_sprite.get_height()))
+        left_scaled = pygame.transform.smoothscale(left_sprite, (left_w, target_h))
+        # Keep the outside edge fixed so damage makes the bar recede inward.
+        surf.blit(left_scaled, (left_track.left, left_track.top))
 
-        # Left health bar: scaled carrot sprite from HealthBar_SpriteSheet.png (Tomato)
-        # Flip horizontally so the leafy green top attaches to the portrait on the left
-        h_idx = min(len(self.health_frames) - 1, max(0, game_rules.HEALTH_MAX - self.health))
-        left_sprite = pygame.transform.flip(self.health_frames[h_idx], True, False)
-        # Fill the complete track for every health state.
-        target_h = bar_h - 4
-        target_w = left_track.width - 8
-        left_scaled = pygame.transform.smoothscale(left_sprite, (target_w, target_h))
-        surf.blit(left_scaled, (left_track.left + 4, left_track.top + 2))
-
-        # Right health bar: scaled carrot sprite from HealthBar_SpriteSheet.png (Opponent)
         opp_hp = self.enemy_health if not self.infinite else max(1, 5 - (self.enemy_losses % 5))
-        opp_idx = min(len(self.health_frames) - 1, max(0, game_rules.OPPONENT_HEALTH_MAX - opp_hp))
-        right_sprite = self.health_frames[opp_idx]
-        right_scaled = pygame.transform.smoothscale(right_sprite, (right_track.width - 8, target_h))
-        surf.blit(right_scaled, (right_track.left + 4, right_track.top + 2))
+        opponent_max = 5 if self.infinite else game_rules.OPPONENT_HEALTH_MAX
+        opponent_idx = min(
+            len(self.health_frames) - 1,
+            max(0, round((opponent_max - opp_hp) * (len(self.health_frames) - 1) / opponent_max)),
+        )
+        right_sprite = self.health_frames[opponent_idx]
+        right_w = max(1, round(right_sprite.get_width() * target_h / right_sprite.get_height()))
+        right_scaled = pygame.transform.smoothscale(right_sprite, (right_w, target_h))
+        # Mirror the player bar's inward retreat from the right screen edge.
+        surf.blit(right_scaled, (right_track.right - right_w, right_track.top))
 
         # Names with soft drop shadow underneath
         draw_shadow_text(surf, self.fonts["body_bold"], "Tomato", TEXT_ON_DARK, offset=2, alpha=160, topleft=(left_track.left + 4, left_track.bottom + 8))
@@ -1874,15 +2028,19 @@ class Game:
         draw_chip(surf, self.fonts["small"], title, fill=(42, 28, 18), color=TEXT_ON_DARK, midtop=(center_x, med_rect.bottom + 6))
 
     def _draw_gameplay(self, surf: pygame.Surface) -> None:
-        chef = self.chef_frames[0]
-        surf.blit(chef, chef.get_rect(midbottom=CHEF_ANCHOR))
-        # Tables rendered aligned with the bottom of the screen
-        surf.blit(self.tables, (0, 0))
+        scene_y = round(self.foreground_camera_y)
+        chef_y = round(self.chef_camera_y * CHEF_PAN_RATIO)
+        chef = self.chef_frames[self.chef.current_frame]
+        chef_anchor = (CHEF_ANCHOR[0], CHEF_ANCHOR[1] + chef_y)
+        surf.blit(chef, chef.get_rect(midbottom=chef_anchor))
+        table_margin = round(GAMEPLAY_PAN_PIXELS * FOREGROUND_PAN_RATIO)
+        table_source_y = table_margin - scene_y
+        surf.blit(self.tables_pan, (0, 0), pygame.Rect(0, table_source_y, VIRTUAL_W, VIRTUAL_H))
 
         self.tomato.draw(
             surf,
             self.health,
-            TOMATO_ANCHOR,
+            (TOMATO_ANCHOR[0], TOMATO_ANCHOR[1] + scene_y),
             width=CHARACTER_SIZE,
             mistake=self.tomato_flash > 0,
             shake_time=FLASH_DURATION - self.tomato_flash,
@@ -1890,7 +2048,10 @@ class Game:
         )
 
         enemy_width = ENEMY_DRAW_WIDTHS.get(self.enemy_name, CHARACTER_SIZE)
-        enemy_anchor = (min(ENEMY_ANCHOR[0], VIRTUAL_W - 10 - enemy_width // 2), ENEMY_ANCHOR[1])
+        enemy_anchor = (
+            min(ENEMY_ANCHOR[0], VIRTUAL_W - 10 - enemy_width // 2),
+            ENEMY_ANCHOR[1] + scene_y,
+        )
         self.enemies.get(self.enemy_name, self.peeler).draw(
             surf, self._enemy_frame_index(), enemy_anchor,
             enemy_width,
@@ -1900,11 +2061,19 @@ class Game:
             shake_duration=FLASH_DURATION,
         )
 
-        # The dialogue card stays in its final position; only paper reveal timing changes.
-        claim_box = DIALOGUE_RECT.copy()
+        if self.state == "FEEDBACK":
+            if self.review_fallacy_id is not None:
+                # Dim the gameplay and show the review card beneath the Judge's dialogue.
+                overlay = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
+                overlay_alpha = min(160, int(160 * (self.review_age / FEEDBACK_ENTER_SECONDS))) if self.review_age < FEEDBACK_ENTER_SECONDS else 160
+                overlay.fill((*OVERLAY_DARK, overlay_alpha))
+                surf.blit(overlay, (0, 0))
+                self._draw_review_flashcard(surf)
+
+        claim_box = DIALOGUE_RECT
 
         # Floating answer papers: bounded above the claim box so they never collide or overlap!
-        if self.state == "GAMEPLAY" and self.dialogue_phase == "DONE":
+        if self.state == "GAMEPLAY" and self.dialogue_phase in ("DONE", "ACTIVE"):
             if not self.paused:
                 for paper in self.papers:
                     paper.draw(surf, self.fonts["paper"])
@@ -1912,27 +2081,53 @@ class Game:
         # Dialogue Card with speaker tab
         draw_card(surf, claim_box, radius=RADIUS_PANEL)
         tab_rect = pygame.Rect(claim_box.left + 24, claim_box.top - 14, 180, 28)
-        draw_rounded_rect(surf, tab_rect, PRIMARY, radius=8)
-        speaker_txt = self.enemy_name or "Claim"
+        speaker_txt = self.dialogue_speaker or self.enemy_name or "Judge"
+        tab_color = (68, 120, 190) if speaker_txt == "Judge" else PRIMARY
+        draw_rounded_rect(surf, tab_rect, tab_color, radius=8)
         draw_text(surf, self.fonts["small"], speaker_txt, TEXT_ON_DARK, center=tab_rect.center)
 
-        claim_lines = wrap_text(self.current_claim, self.fonts["body"], claim_box.width - 56)[:4]
+        # Typewriter text display with stable layout (no glitching/jumping)
+        displayed_text = self.dialogue_text or self.current_claim
+        text_left = claim_box.left + 28
+        text_top = claim_box.top + 20
+        text_width = claim_box.width - 56
+        text_height = claim_box.height - 36
+        dialogue_font = self.dialogue_fonts[-1]
+        full_lines = wrap_text(displayed_text, dialogue_font, text_width)
+        for candidate in self.dialogue_fonts:
+            candidate_lines = wrap_text(displayed_text, candidate, text_width)
+            if len(candidate_lines) * candidate.get_linesize() <= text_height:
+                dialogue_font = candidate
+                full_lines = candidate_lines
+                break
+
+        if self.dialogue_phase != "ACTIVE":
+            chars_to_show = max(0, min(len(displayed_text), int(self.dialogue_char_count)))
+            claim_lines = wrap_text_progressive(displayed_text, chars_to_show, dialogue_font, text_width)
+        else:
+            claim_lines = full_lines
+
+        line_height = dialogue_font.get_linesize()
+        text_y = text_top + max(0, (text_height - len(full_lines) * line_height) // 2)
         for i, line in enumerate(claim_lines):
-            draw_text(surf, self.fonts["body"], line, INK, topleft=(claim_box.left + 28, claim_box.top + 28 + i * 28))
+            draw_text(surf, dialogue_font, line, INK, topleft=(text_left, text_y + i * line_height))
+
+        # Sideways triangle (▶) continue indicator when typewriter finishes
+        if self.state in ("GAMEPLAY", "FEEDBACK") and self.dialogue_phase in ("WAIT_CLICK", "OPPONENT_INTRO", "POST_VERDICT_WIN", "POST_VERDICT_LOSE"):
+            if int(self.dialogue_char_count) >= len(displayed_text):
+                # Gentle breathing/bobbing indicator in bottom right corner
+                pulse = int(math.sin(pygame.time.get_ticks() / 150.0) * 4)
+                tri_cx = claim_box.right - 36 + pulse
+                tri_cy = claim_box.bottom - 28
+                tri_pts = [
+                    (tri_cx - 7, tri_cy - 9),
+                    (tri_cx + 7, tri_cy),
+                    (tri_cx - 7, tri_cy + 9)
+                ]
+                pygame.draw.polygon(surf, tab_color, tri_pts)
 
         # Render HUD on top of gameplay layer
         self._draw_hud(surf)
-
-        if self.state == "FEEDBACK":
-            if self.review_fallacy_id is not None:
-                # Dim full background including HUD & dialogue card
-                overlay = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
-                overlay_alpha = min(160, int(160 * (self.review_age / FEEDBACK_ENTER_SECONDS))) if self.review_age < FEEDBACK_ENTER_SECONDS else 160
-                overlay.fill((*OVERLAY_DARK, overlay_alpha))
-                surf.blit(overlay, (0, 0))
-                self._draw_review_flashcard(surf)
-            self._draw_feedback_banner(surf)
-
     def _draw_gameplay_frozen(self, surf: pygame.Surface) -> None:
         self.state, saved = "GAMEPLAY", self.state
         self.papers = []
@@ -2035,15 +2230,22 @@ class Game:
         draw_card(surf, card, radius=RADIUS_PANEL)
         draw_text(surf, self.fonts["title_bold"], title, color, center=(card.centerx, card.top + 50))
 
-        tomato_idx = 0 if title == "LEVEL COMPLETE" else len(self.tomato_frames) - 1
-        tomato_img = pygame.transform.smoothscale(self.tomato_frames[tomato_idx], (160, 160))
-        surf.blit(tomato_img, tomato_img.get_rect(center=(card.centerx, card.top + 175)))
+        if title == "LEVEL FAILED":
+            tomato_img = self.smashed_tomato
+        else:
+            tomato_img = self.tomato_frames[0]
+        tomato_rect = self._fitted_card(tomato_img, (160, 160), (card.centerx, card.top + 175))
+        tomato_img = pygame.transform.smoothscale(tomato_img, tomato_rect.size)
+        surf.blit(tomato_img, tomato_rect)
 
         if title == "LEVEL COMPLETE":
-            sub = f"{self.enemy_name} was outmatched in the kitchen trial!"
+            sub = f"Judge: \"{JUDGE_WIN_STATEMENT}\""
+            wrapped = wrap_text(sub, self.fonts["small"], card.width - 40)
+            for j, line in enumerate(wrapped):
+                draw_text(surf, self.fonts["small"], line, INK, center=(card.centerx, card.top + 270 + j * 20))
         else:
             sub = self.fail_reason or "Health depleted — review and try again!"
-        draw_text(surf, self.fonts["small"], sub, INK_SOFT, center=(card.centerx, card.top + 280))
+            draw_text(surf, self.fonts["small"], sub, INK_SOFT, center=(card.centerx, card.top + 280))
 
     def _draw_infinite_results(self, surf: pygame.Surface) -> None:
         dim = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
@@ -2067,15 +2269,18 @@ class Game:
         y = 110
         for text, remaining in self.toasts:
             alpha = 255 if remaining > 0.6 else int(255 * (remaining / 0.6))
-            box = pygame.Rect(0, 0, 440, 48)
+            lines = wrap_text(text, self.fonts["paper"], 480)
+            box_h = 24 + len(lines) * 22
+            box = pygame.Rect(0, 0, 520, box_h)
             box.midtop = (VIRTUAL_W // 2, y)
             panel = pygame.Surface(box.size, pygame.SRCALPHA)
             draw_rounded_rect(panel, panel.get_rect(), (*SURFACE, alpha), 12, (*LINE_STRONG, alpha), 2)
             surf.blit(panel, box)
-            label = self.fonts["body_bold"].render(text, True, PRIMARY)
-            label.set_alpha(alpha)
-            surf.blit(label, label.get_rect(center=box.center))
-            y += 56
+            for i, line in enumerate(lines):
+                label = self.fonts["paper"].render(line, True, PRIMARY)
+                label.set_alpha(alpha)
+                surf.blit(label, label.get_rect(center=(box.centerx, box.top + 16 + i * 22)))
+            y += box_h + 8
 
     def _book_geometry(self) -> tuple[tuple[int, int], pygame.Rect, pygame.Rect]:
         bw, bh = self.book_image.get_size()
@@ -2292,9 +2497,10 @@ class Game:
         else:
             scale = 0.88
 
-        dest = self._fitted_card(image, (860, 400), (VIRTUAL_W // 2, 420))
+        #location
+        dest = self._fitted_card(image, (820, 350), (VIRTUAL_W // 2, 200))
         dest = pygame.Rect(0, 0, max(1, int(dest.width * scale)), max(1, int(dest.height * scale)))
-        dest.center = (VIRTUAL_W // 2, 420)
+        dest.center = (VIRTUAL_W // 2, 370)
         scaled = pygame.transform.smoothscale(image, dest.size)
         shadow = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
         pygame.draw.rect(shadow, (20, 10, 6, 80), shadow.get_rect(), border_radius=18)
@@ -2382,7 +2588,7 @@ async def main() -> None:
     game.layout_buttons()
 
     running = True
-    mouse_press_handled = False
+    mouse_press_seen = False
     while running:
         dt = clock.tick(120) / 1000.0
         window_size = pygame.display.get_window_size()
@@ -2392,13 +2598,11 @@ async def main() -> None:
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not portrait:
-                # Activate controls on press for immediate one-click response.
-                # Keep a release fallback below for platforms that swallow the
-                # first press while the game window gains focus.
-                mouse_press_handled = game.handle_press(event.pos)
-                if not mouse_press_handled:
-                    mouse_press_handled = game.handle_click(event.pos)
-                if mouse_press_handled:
+                # Activate on press, then suppress the release half of the same
+                # click. Keep the release fallback for focus clicks on platforms
+                # that swallow mouse-down while the window gains focus.
+                mouse_press_seen = True
+                if game.handle_press(event.pos):
                     game.layout_buttons()
             elif event.type == pygame.MOUSEMOTION:
                 game.mouse_pos = event.pos
@@ -2411,11 +2615,11 @@ async def main() -> None:
             elif event.type in (pygame.KEYDOWN, pygame.TEXTINPUT):
                 game.handle_key(event)
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                if not mouse_press_handled and game.dragging_slider is None and not portrait:
+                if not mouse_press_seen and game.dragging_slider is None and not portrait:
                     game.handle_click(event.pos)
                     game.layout_buttons()
                 game.handle_release()
-                mouse_press_handled = False
+                mouse_press_seen = False
 
         if not portrait:
             game.update(dt)

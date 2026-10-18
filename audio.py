@@ -29,6 +29,7 @@ SFX_FILES = {
     "chomp": "carrot chomp.mp3",
     "knife_hit": "Chef knife hit.mp3",
     "click": "click.mp3",
+    "text": "text.mp3",
     "knife_correct_1": "knife1.mp3",
     "knife_correct_2": "knife2.mp3",
     "knife_correct_3": "knife3.mp3",
@@ -52,6 +53,7 @@ class AudioManager:
         self.sfx_volume = clamp_volume(sfx_volume)
         self.current_track: str | None = None
         self.sounds: dict[str, pygame.mixer.Sound] = {}
+        self.looping_sfx: dict[str, pygame.mixer.Channel] = {}
         self._last_group_choice: dict[str, str] = {}
         self.enabled = self._init_mixer()
         if self.enabled:
@@ -84,6 +86,23 @@ class AudioManager:
         sound.set_volume(self.sfx_volume)
         sound.play()
 
+    def play_sfx_loop(self, name: str) -> None:
+        sound = self.sounds.get(name)
+        if sound is None or self.sfx_volume <= 0:
+            return
+        channel = self.looping_sfx.get(name)
+        if channel is not None and channel.get_busy():
+            return
+        sound.set_volume(self.sfx_volume)
+        channel = sound.play(loops=-1)
+        if channel is not None:
+            self.looping_sfx[name] = channel
+
+    def stop_sfx(self, name: str) -> None:
+        channel = self.looping_sfx.pop(name, None)
+        if channel is not None:
+            channel.stop()
+
     def play_music(self, track: str) -> None:
         """Loop a named track; calling again with the playing track is a no-op."""
         if track == self.current_track or not self.enabled:
@@ -111,3 +130,5 @@ class AudioManager:
 
     def set_sfx_volume(self, volume: float) -> None:
         self.sfx_volume = clamp_volume(volume)
+        for channel in self.looping_sfx.values():
+            channel.set_volume(self.sfx_volume)

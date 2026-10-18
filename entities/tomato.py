@@ -26,7 +26,7 @@ class Tomato:
         frame_index = (
             len(self.frames) - 1
             if mistake
-            else min(len(self.frames) - 2, max(0, 5 - hp))
+            else min(len(self.frames) - 2, max(0, 6 - hp))
         )
 
         # Reuse scaled frames. draw() runs every frame, so scaling here without a

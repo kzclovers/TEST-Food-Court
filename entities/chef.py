@@ -36,7 +36,7 @@ class Chef:
             self.current_frame += 1
 
             if self.current_frame >= len(self.frames):
-                self.current_frame = len(self.frames) - 1
+                self.current_frame = 0
                 self.animating = False
 
     def draw(self, screen, position=(108, 119), scale=1.0):

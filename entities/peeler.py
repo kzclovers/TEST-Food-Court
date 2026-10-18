@@ -12,6 +12,9 @@ class Peeler:
     def __init__(self, path=None):
         path = path or Path(__file__).resolve().parents[1] / 'assets/Peeler_SpriteSheet.png'
         self.frames = SpriteStrip(path, frame_count=5, painted_width=5585).frames
+        # The second source frame is the happy expression. Start there, then
+        # move through the neutral and sad frames, leaving damage as the last.
+        self.frames = [self.frames[1], self.frames[0], *self.frames[2:]]
         self.scaled_frames = {}
 
     def draw(

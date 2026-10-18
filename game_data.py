@@ -361,3 +361,31 @@ def enemy_for_fallacy(fallacy_id: int) -> str:
         if fallacy_id in info["fallacy_ids"]:
             return info["enemy"]
     return ""
+
+
+# Judge (Chef) Dialogue banks
+JUDGE_OPENINGS: dict[int, str] = {
+    1: "Order in the Food Court! Tomato stands accused of being soft and unfit for this kitchen. Vegetable Peeler, present your case!",
+    2: "The court reconvenes! Vegetable Peeler still insists you should be scraped. Let us hear your evidence!",
+    3: "Order! Knife has ordered for your beheading. Knife will prove their point without cutting corners!",
+    4: "Court is back in session! Knife demands Tomato be diced immediately. Prove yourself innocent of the charges!",
+    5: "Final trial! Boiling Pot claims you belong in a simmer forever. Present your rebuttal!",
+    6: "The grand trial of the Food Court! The heat is on. Prove Boiling Pot wrong or your fate is sealed!",
+}
+JUDGE_INFINITE_OPENING = "Welcome to Endless Food Court! The heat never turns off here. Utensils, state your accusations!"
+
+JUDGE_CORRECT_REACTIONS: list[str] = [
+    "Hmm... that did not hold up logically. You have a point, Tomato.",
+    "A sharp refutation! That argument against you was completely rotten.",
+    "Objection sustained! You saw right through that flawed reasoning.",
+    "The defense has a point—your accusation holds no water!",
+]
+
+JUDGE_WRONG_REACTIONS: list[str] = [
+    "Hm... maybe you should be cooked after all...",
+    "That didn't address the claim at all! You're sure would be better off in soup.",
+    "They made a rather compelling point. You might be in hot water now.",
+    "An unsubstantiated defense! The kitchen pot grows hotter...",
+]
+
+JUDGE_WIN_STATEMENT = "Case dismissed! Tomato has proven its logic beyond a reasonable doubt. You shall not be cooked today!"

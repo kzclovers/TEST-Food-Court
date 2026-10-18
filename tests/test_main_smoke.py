@@ -82,6 +82,9 @@ class GameSmokeTests(unittest.TestCase):
     def _reveal_papers(self):
         self.game.update(self.main.DIALOGUE_CENTER_SECONDS + 0.01)
         self.game.update(self.main.DIALOGUE_MOVE_SECONDS + 0.01)
+        if self.game.dialogue_phase == "WAIT_CLICK":
+            self.game.handle_click((640, 560))
+            self.game.handle_click((640, 560))
 
     def _finish_feedback(self):
         if self.game.review_fallacy_id is not None:
@@ -362,6 +365,11 @@ class GameSmokeTests(unittest.TestCase):
         self.assertEqual(self.game.papers, [])
 
         self.game.update(self.main.DIALOGUE_MOVE_SECONDS + 0.01)
+        self.assertEqual(self.game.dialogue_phase, "WAIT_CLICK")
+        self.assertEqual(self.game.papers, [])
+        # Dismiss judge dialogue to advance to gameplay
+        self.game.handle_click((640, 560))
+        self.game.handle_click((640, 560))
         self.assertEqual(self.game.dialogue_phase, "DONE")
         self.assertGreater(len(self.game.papers), 0)
         self.assertAlmostEqual(self.game.timer, self.game.timer_max)
