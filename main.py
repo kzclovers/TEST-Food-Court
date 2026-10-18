@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Food Court.
 
 Run on desktop with `python main.py`. Packaged for the browser with
@@ -98,22 +99,22 @@ DIALOGUE_RECT = pygame.Rect(290, 552, 700, 156)
 PAPER_BOUNDS = pygame.Rect(300, 232, 680, DIALOGUE_RECT.top - 20 - 232)
 
 # Fighting-game HUD: two health bars meet at a centre timer medallion.
-HUD_BAR_LEFT = pygame.Rect(100, 22, 480, 30)
-HUD_BAR_RIGHT = pygame.Rect(VIRTUAL_W - 100 - 480, 22, 480, 30)
+HUD_BAR_LEFT = pygame.Rect(124, 46, 420, 36)
+HUD_BAR_RIGHT = pygame.Rect(VIRTUAL_W - 124 - 420, 46, 420, 36)
 HUD_BAR_SLANT = 16
-HUD_PORTRAIT_D = 76
-HUD_PORTRAIT_LEFT = (50, 40)
-HUD_PORTRAIT_RIGHT = (VIRTUAL_W - 50, 40)
-HUD_TIMER_CENTER = (VIRTUAL_W // 2, 42)
-HUD_TIMER_RADIUS = 42
+HUD_PORTRAIT_D = 84
+HUD_PORTRAIT_LEFT = (64, 64)
+HUD_PORTRAIT_RIGHT = (VIRTUAL_W - 64, 64)
+HUD_TIMER_CENTER = (VIRTUAL_W // 2, 64)
+HUD_TIMER_RADIUS = 38
 
-LEVEL_TILE_SIZE = (170, 236)
-# Six tiles grouped in pairs, one pair per opponent.
+LEVEL_TILE_SIZE = (170, 280)
+# Six level cards uniformly centered across the screen
 LEVEL_CIRCLE_RECTS = [
-    pygame.Rect(62 + (i // 2) * 400 + (i % 2) * 186, 168, *LEVEL_TILE_SIZE) for i in range(6)
+    pygame.Rect(70 + i * 194, VIRTUAL_H //2 - LEVEL_TILE_SIZE[1] //2, *LEVEL_TILE_SIZE) for i in range(6)
 ]
 LEVEL_PORTRAIT_D = 116
-INFINITE_BUTTON_RECT = pygame.Rect(330, 452, 620, 100)
+INFINITE_BUTTON_RECT = pygame.Rect(330, 580, 620, 100)
 RETURN_BUTTON_RECT = pygame.Rect(32, 28, 124, 48)
 PAUSE_BUTTON_RECT = pygame.Rect(VIRTUAL_W - 280, 654, 44, 44)
 PAUSE_POPUP_RECT = pygame.Rect(460, 196, 360, 320)
@@ -252,6 +253,38 @@ def draw_rounded_rect(
         max(0, border_width),
     )
     surf.blit(image, rect)
+
+
+@lru_cache(maxsize=128)
+def _circle_surface(radius: int, fill: tuple[int, ...], border: tuple[int, ...] | None, border_width: int) -> pygame.Surface:
+    supersample = 4
+    size = radius * 2 * supersample
+    surface = pygame.Surface((size, size), pygame.SRCALPHA)
+    center = (size // 2, size // 2)
+    r = radius * supersample
+    if border is not None and border_width > 0:
+        pygame.draw.circle(surface, border, center, r)
+        inner_r = max(0, r - border_width * supersample)
+        if inner_r > 0:
+            pygame.draw.circle(surface, fill, center, inner_r)
+    else:
+        pygame.draw.circle(surface, fill, center, r)
+    return pygame.transform.smoothscale(surface, (radius * 2, radius * 2))
+
+
+def draw_smooth_circle(
+    surf: pygame.Surface,
+    color: tuple[int, ...],
+    center: tuple[int, int],
+    radius: int,
+    border: tuple[int, ...] | None = None,
+    border_width: int = 0,
+) -> None:
+    """Draw smooth, anti-aliased circles without pixelated stepping."""
+    if radius <= 0:
+        return
+    circ_surf = _circle_surface(radius, tuple(color), tuple(border) if border is not None else None, border_width)
+    surf.blit(circ_surf, (center[0] - radius, center[1] - radius))
 
 
 def window_to_virtual(pos: tuple[float, float], window_size: tuple[int, int]) -> tuple[float, float]:
@@ -437,7 +470,7 @@ def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(
 
 def circle_portrait(sprite: pygame.Surface, diameter: int, bg=(245, 242, 236), darken: bool = False) -> pygame.Surface:
     portrait = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
-    pygame.draw.circle(portrait, bg, (diameter // 2, diameter // 2), diameter // 2)
+    draw_smooth_circle(portrait, bg, (diameter // 2, diameter // 2), diameter // 2)
     scale = diameter * 1.05 / max(sprite.get_width(), sprite.get_height())
     img = pygame.transform.smoothscale(
         sprite, (max(1, round(sprite.get_width() * scale)), max(1, round(sprite.get_height() * scale)))
@@ -447,8 +480,11 @@ def circle_portrait(sprite: pygame.Surface, diameter: int, bg=(245, 242, 236), d
         shade = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
         shade.fill((40, 40, 40, 170))
         portrait.blit(shade, (0, 0))
-    mask = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
-    pygame.draw.circle(mask, (255, 255, 255, 255), (diameter // 2, diameter // 2), diameter // 2)
+    # Smooth supersampled mask to eliminate pixelated edges
+    supersample = 4
+    mask_big = pygame.Surface((diameter * supersample, diameter * supersample), pygame.SRCALPHA)
+    pygame.draw.circle(mask_big, (255, 255, 255, 255), (diameter * supersample // 2, diameter * supersample // 2), diameter * supersample // 2)
+    mask = pygame.transform.smoothscale(mask_big, (diameter, diameter))
     portrait.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
     return portrait
 
@@ -529,6 +565,24 @@ class Button:
             if self.label:
                 draw_shadow_text(surf, font, self.label, TEXT_ON_DARK, offset=1, alpha=130, center=(rect.centerx, rect.bottom + 16))
             return
+        if self.style == "todo":
+            fill = (255, 255, 255) if (self.hovered and self.enabled) else (252, 248, 238)
+            border = PRIMARY if (self.hovered and self.enabled) else (180, 160, 140)
+            draw_shadow(surf, rect, radius=self.radius, offset=(0, 3), alpha=45 if self.hovered else 25, blur=6)
+            draw_rounded_rect(surf, rect, fill, self.radius, border, 2)
+            # To-do checkbox on the left
+            box_sz = 22
+            box = pygame.Rect(rect.left + 16, rect.centery - box_sz // 2, box_sz, box_sz)
+            box_fill = (255, 245, 235) if self.hovered else (245, 240, 230)
+            box_border = PRIMARY if self.hovered else (150, 130, 110)
+            draw_rounded_rect(surf, box, box_fill, 4, box_border, 2)
+            if self.hovered:
+                draw_icon(surf, "check", (box.centerx + 1, box.centery), 18, PRIMARY)
+            # Label
+            text_col = PRIMARY if (self.hovered and self.enabled) else INK
+            label = font.render(self.label, True, text_col if self.enabled else INK_SOFT)
+            surf.blit(label, label.get_rect(midleft=(box.right + 14, rect.centery)))
+            return
         if self.style == "secondary":
             fill = (255, 255, 255) if (self.hovered and self.enabled) else SURFACE
             border = PRIMARY if (self.hovered and self.enabled) else LINE_STRONG
@@ -608,7 +662,6 @@ class Paper:
 
     def draw(self, surf: pygame.Surface, font: pygame.font.Font) -> None:
         r = self.rect()
-        draw_shadow(surf, r, radius=12, offset=(0, 4), alpha=60, blur=6)
         if self.background is not None:
             surf.blit(self.background, r)
         else:
@@ -766,7 +819,7 @@ class Game:
             for fid in range(1, 19)
         }
 
-        health_sheet = load_image("HealthBar_SpriteSheet.png", (11264, 1024), (214, 122, 54))
+        health_sheet = load_image("HealthBar_SpriteSheet.png", (11264, 1024), (214, 1122, 54))
         self.health_frames: list[pygame.Surface] = []
         target_h = 60
         for x, y, w, h in HEALTH_ICON_RECTS:
@@ -991,13 +1044,14 @@ class Game:
             for text, is_correct in entries
         ]
 
-    def handle_paper_click(self, pos: tuple[int, int]) -> None:
+    def handle_paper_click(self, pos: tuple[int, int]) -> bool:
         if self.state != "GAMEPLAY" or self.answered or self.dialogue_phase != "DONE":
-            return
+            return False
         for paper in self.papers:
             if paper.rect().collidepoint(pos):
                 self.resolve_answer(paper.is_correct, timeout=False)
-                return
+                return True
+        return False
 
     def resolve_answer(self, correct: bool, timeout: bool) -> None:
         self.answered = True
@@ -1063,7 +1117,7 @@ class Game:
             if self.infinite:
                 self.finish_infinite()
             else:
-                self.fail_reason = "Health depleted -- give it another go."
+                self.fail_reason = "Health depleted - try again!."
                 self.start_gavel("LEVEL_FAILED")
             return
 
@@ -1222,21 +1276,21 @@ class Game:
                                        style="icon", icon="gear"))
 
         if self.state == "MENU":
-            # Clean centered card layout with primary Play button and secondary options
+            # Dirty recipe book card layout with todo-list checklist buttons
             cx = MENU_CARD_RECT.centerx
-            top = MENU_CARD_RECT.top + 28
-            self.buttons.append(Button(pygame.Rect(cx - 120, top, 240, 54), "Play", self._open_level_select, radius=14))
-            self.buttons.append(Button(pygame.Rect(cx - 120, top + 64, 240, 48), "Instructions", self._open_how_to_play, style="secondary", radius=12))
-            self.buttons.append(Button(pygame.Rect(cx - 120, top + 120, 240, 48), "Dictionary", self._open_dictionary, style="secondary", radius=12))
-            self.buttons.append(Button(pygame.Rect(cx - 120, top + 176, 240, 48), "Settings", self._open_settings, style="secondary", radius=12))
+            top = MENU_CARD_RECT.top + 60
+            self.buttons.append(Button(pygame.Rect(cx - 130, top, 260, 50), "Play", self._open_level_select, style="pill", radius=10))
+            self.buttons.append(Button(pygame.Rect(cx - 130, top + 62, 260, 50), "Instructions", self._open_how_to_play, style="todo", radius=10))
+            self.buttons.append(Button(pygame.Rect(cx - 130, top + 124, 260, 50), "Dictionary", self._open_dictionary, style="todo", radius=10))
+            self.buttons.append(Button(pygame.Rect(cx - 130, top + 186, 260, 50), "Settings", self._open_settings, style="todo", radius=10))
             # Keep hidden Enter button so any automated tests or key hits work seamlessly
-            self.buttons.append(Button(pygame.Rect(cx - 120, top, 240, 54), "Enter", self._open_level_select, style="hidden"))
+            self.buttons.append(Button(pygame.Rect(cx - 130, top, 260, 50), "Enter", self._open_level_select, style="hidden"))
         elif self.state == "HOW_TO_PLAY":
             self.buttons.append(Button(RETURN_BUTTON_RECT, "Back", self._go_menu, style="secondary", radius=12))
         elif self.state == "LEVEL_SELECT":
             self.buttons.append(Button(RETURN_BUTTON_RECT, "Back", self._go_menu, style="secondary", radius=12))
             self.buttons.append(Button(INFINITE_BUTTON_RECT, "Infinite Mode", self.start_infinite,
-                                       enabled=self._infinite_available(), radius=18))
+                                       enabled=self._infinite_available(), style="hidden"))
             for level, rect in zip(sorted(game_data.LEVELS), LEVEL_CIRCLE_RECTS):
                 unlocked = self._level_unlocked(level)
                 action = (lambda lvl=level: self._select_level(lvl)) if unlocked else self._noop
@@ -1439,7 +1493,11 @@ class Game:
         self.progress.save()
 
     def handle_press(self, pos: tuple[int, int]) -> bool:
-        """Start a volume-slider drag; returns True when the press hit a slider."""
+        """Handle press-time interactions and report whether one consumed it."""
+        if self.state == "GAMEPLAY":
+            # Answer papers move every frame, so hit-test at mouse-down before
+            # they can drift away from under the pointer before mouse-up.
+            return self.handle_paper_click(pos)
         if self.state != "SETTINGS":
             return False
         for i, row in enumerate(SETTINGS_ROW_RECTS):
@@ -1508,16 +1566,17 @@ class Game:
 
     # -- event handling ---------------------------------------------------
 
-    def handle_click(self, pos: tuple[int, int]) -> None:
+    def handle_click(self, pos: tuple[int, int]) -> bool:
         if self.state == "SETTINGS" and not DEV_INPUT_RECT.collidepoint(pos):
             self.dev_input_active = False
         for button in self.buttons:
             if button.enabled and button.rect.collidepoint(pos):
                 self.audio.play_sfx("click")
                 button.action()
-                return
+                return True
         if not self.paused and not self.show_dictionary and self.state != "SETTINGS":
-            self.handle_paper_click(pos)
+            return self.handle_paper_click(pos)
+        return False
 
     # -- drawing ---------------------------------------------------
 
@@ -1592,13 +1651,28 @@ class Game:
         draw_text(surf, self.fonts["title_bold"], "PAUSED", PRIMARY, center=(PAUSE_POPUP_RECT.centerx, PAUSE_POPUP_RECT.top + 64))
 
     def _draw_menu(self, surf: pygame.Surface) -> None:
-        # Clean central card layout
-        draw_card(surf, MENU_CARD_RECT, radius=RADIUS_PANEL)
-        # Main Logo scaled nicely above the card
+        # Dirty recipe book overlay behind the logo and menu settings
+        book_rect = pygame.Rect(VIRTUAL_W // 2 - 250, 40, 500, 630)
+        draw_shadow(surf, book_rect, radius=20, offset=(0, 6), alpha=90, blur=12)
+        # Warm dirty recipe book paper base
+        paper_bg = (248, 242, 226)
+        draw_rounded_rect(surf, book_rect, paper_bg, radius=20, border=(188, 168, 144), border_width=2)
+        # Faint ruled recipe lines
+        for y_line in range(book_rect.top + 220, book_rect.bottom - 40, 28):
+            pygame.draw.line(surf, (228, 218, 202), (book_rect.left + 24, y_line), (book_rect.right - 24, y_line), 1)
+        # Subtle coffee/grease stain ring accent in the corner
+        draw_smooth_circle(surf, (215, 192, 165, 35), (book_rect.right - 60, book_rect.top + 70), 38, border=(195, 170, 140, 45), border_width=3)
+        draw_smooth_circle(surf, (215, 192, 165, 35), (book_rect.right - 30, book_rect.top + 90), 20, border=(195, 170, 140, 45), border_width=3)
+        draw_smooth_circle(surf, (215, 192, 165, 25), (book_rect.left + 50, book_rect.bottom - 70), 28, border=(195, 170, 140, 35), border_width=2)
+        draw_smooth_circle(surf, (215, 192, 165, 25), (book_rect.left + 90, book_rect.bottom - 50), 40, border=(195, 170, 140, 35), border_width=2)
+        # Recipe header text
+        draw_text(surf, self.fonts["paper"], "RECIPE FOR LOGICAL FALLACIES", (160, 138, 116), center=(book_rect.centerx, book_rect.top + 34))
+
+        # Main Logo scaled nicely in the recipe book
         logo_w = MENU_LOGO_WIDTH
         logo_h = int(logo_w * self.logo.get_height() / self.logo.get_width())
         logo_scaled = pygame.transform.smoothscale(self.logo, (logo_w, logo_h))
-        surf.blit(logo_scaled, logo_scaled.get_rect(center=(MENU_CARD_RECT.centerx, MENU_CARD_RECT.top - 120)))
+        surf.blit(logo_scaled, logo_scaled.get_rect(center=(book_rect.centerx, book_rect.top + 200)))
 
     def _draw_how_to_play(self, surf: pygame.Surface) -> None:
         panel = pygame.Rect(180, 50, 920, 620)
@@ -1650,18 +1724,18 @@ class Game:
             p_rect.center = (card_rect.centerx, card_rect.top + 76)
             portrait = self.enemy_portraits[enemy] if unlocked else self.enemy_portraits_locked[enemy]
             surf.blit(pygame.transform.smoothscale(portrait, (p_size, p_size)), p_rect)
-            pygame.draw.circle(surf, border_col, p_rect.center, p_size // 2, 2)
+            draw_smooth_circle(surf, (0, 0, 0, 0), p_rect.center, p_size // 2, border=border_col, border_width=2)
 
             if not unlocked:
                 draw_icon(surf, "lock", p_rect.center, 54, (240, 240, 240))
-                draw_text(surf, self.fonts["body_bold"], f"Level {level}", INK_SOFT, center=(card_rect.centerx, card_rect.bottom - 46))
-                draw_chip(surf, self.fonts["paper"], "LOCKED", fill=(180, 170, 160), color=TEXT_ON_DARK, center=(card_rect.centerx, card_rect.bottom - 22))
+                draw_text(surf, self.fonts["body_bold"], f"Level {level}", INK_SOFT, center=(card_rect.centerx, card_rect.bottom - 100))
+                draw_chip(surf, self.fonts["paper"], "LOCKED", fill=(180, 170, 160), color=TEXT_ON_DARK, center=(card_rect.centerx, card_rect.bottom - 28))
             else:
-                draw_text(surf, self.fonts["body_bold"], f"Level {level}", INK, center=(card_rect.centerx, card_rect.bottom - 48))
+                draw_text(surf, self.fonts["body_bold"], f"Level {level}", INK, center=(card_rect.centerx, card_rect.bottom - 100))
                 if level in self.progress.completed_levels:
-                    draw_chip(surf, self.fonts["paper"], "✓ CLEARED", fill=SECONDARY, color=TEXT_ON_DARK, center=(card_rect.centerx, card_rect.bottom - 22))
+                    draw_chip(surf, self.fonts["paper"], "CLEARED", fill=SECONDARY, color=TEXT_ON_DARK, center=(card_rect.centerx, card_rect.bottom - 28))
                 else:
-                    draw_chip(surf, self.fonts["paper"], enemy.split()[0], fill=SURFACE_ALT, color=INK_SOFT, center=(card_rect.centerx, card_rect.bottom - 22))
+                    draw_chip(surf, self.fonts["paper"], enemy.split()[0], fill=SURFACE_ALT, color=INK_SOFT, center=(card_rect.centerx, card_rect.bottom - 28))
 
         # Infinite Mode banner card below
         inf_card = INFINITE_BUTTON_RECT
@@ -1675,11 +1749,11 @@ class Game:
         draw_text(surf, self.fonts["large_bold"], "Infinite Mode", inf_title_col, topleft=(inf_card.left + 32, inf_card.top + 20))
         if inf_avail:
             best = self.progress.infinite_best_seconds.get(INFINITE_SAVE_KEY, 0.0)
-            hint = f"Personal Best: {best:.1f}s — Endless survival with all unlocked fallacies" if best else "Endless survival trial with all unlocked fallacies"
+            hint = f"Endless survival | Best: {best:.1f}s" if best else "Endless survival trial"
             draw_text(surf, self.fonts["small"], hint, INK_SOFT, topleft=(inf_card.left + 34, inf_card.top + 60))
             draw_chip(surf, self.fonts["body_bold"], "PLAY ∞", fill=PRIMARY, color=TEXT_ON_DARK, center=(inf_card.right - 90, inf_card.centery))
         else:
-            draw_text(surf, self.fonts["small"], "Defeat Level 1 to unlock Infinite Mode", INK_SOFT, topleft=(inf_card.left + 34, inf_card.top + 60))
+            draw_text(surf, self.fonts["small"], "Defeat Level 1 to unlock Infinite Mode", INK_SOFT, topleft=(inf_card.left + 34, inf_card.top + 50))
             draw_chip(surf, self.fonts["body_bold"], "LOCKED", fill=(180, 170, 160), color=TEXT_ON_DARK, center=(inf_card.right - 90, inf_card.centery))
 
     def _fitted_card(self, image: pygame.Surface, max_size: tuple[int, int], center: tuple[int, int]) -> pygame.Rect:
@@ -1720,69 +1794,54 @@ class Game:
                 draw_text(surf, self.fonts["body_bold"], "Added", TEXT_ON_DARK, center=(button.centerx + 14, button.centery))
 
     def _draw_hud(self, surf: pygame.Surface) -> None:
-        # Fighting game health bar stretching across top
-        # Left bar: Tomato (green -> yellow -> red depending on health)
+        # Fighting game health bar stretching across top, featuring HealthBar_SpriteSheet frames
+        # Left bar: Tomato
         # Right bar: Opponent
         # Center: Timer ring/medallion & Mode / Level pill
 
-        # Bar dimensions & geometry
-        bar_y = 24
-        bar_h = 24
-        bar_w = 440
-        center_x = VIRTUAL_W // 2
+        # Bar dimensions & geometry (moved down for balanced vertical breathing room)
+        bar_h = HUD_BAR_LEFT.height
+        center_x = HUD_TIMER_CENTER[0]
 
-        left_track = pygame.Rect(HUD_PORTRAIT_LEFT[0] + HUD_PORTRAIT_D // 2 + 12, bar_y, bar_w, bar_h)
-        right_track = pygame.Rect(HUD_PORTRAIT_RIGHT[0] - HUD_PORTRAIT_D // 2 - 12 - bar_w, bar_y, bar_w, bar_h)
+        left_track = HUD_BAR_LEFT
+        right_track = HUD_BAR_RIGHT
 
-        # Shadows and tracks
-        draw_shadow(surf, left_track, radius=6, offset=(0, 3), alpha=70, blur=6)
-        draw_shadow(surf, right_track, radius=6, offset=(0, 3), alpha=70, blur=6)
-        draw_rounded_rect(surf, left_track, (42, 26, 18), radius=6, border=(74, 50, 34), border_width=2)
-        draw_rounded_rect(surf, right_track, (42, 26, 18), radius=6, border=(74, 50, 34), border_width=2)
+        # Keep the empty track light so the transparent sprite sheet doesn't
+        # read as a black-backed bar.
+        draw_shadow(surf, left_track, radius=8, offset=(0, 3), alpha=70, blur=6)
+        draw_shadow(surf, right_track, radius=8, offset=(0, 3), alpha=70, blur=6)
+        draw_rounded_rect(surf, left_track, SURFACE_ALT, radius=8, border=LINE_STRONG, border_width=2)
+        draw_rounded_rect(surf, right_track, SURFACE_ALT, radius=8, border=LINE_STRONG, border_width=2)
 
-        # Left health fill (Tomato: drains right-to-left)
-        hp_pct = max(0.0, min(1.0, self.health / game_rules.HEALTH_MAX))
-        fill_w_left = round(bar_w * hp_pct)
-        if fill_w_left > 0:
-            fill_col = SECONDARY if hp_pct > 0.4 else (GOLD if hp_pct > 0.2 else DANGER)
-            left_fill = pygame.Rect(left_track.right - fill_w_left, left_track.top + 2, fill_w_left, bar_h - 4)
-            draw_rounded_rect(surf, left_fill, fill_col, radius=4)
-            # Gloss highlight
-            pygame.draw.line(surf, mix(fill_col, (255, 255, 255), 0.4), (left_fill.left + 2, left_fill.top + 2), (left_fill.right - 2, left_fill.top + 2), 2)
+        # Left health bar: scaled carrot sprite from HealthBar_SpriteSheet.png (Tomato)
+        # Flip horizontally so the leafy green top attaches to the portrait on the left
+        h_idx = min(len(self.health_frames) - 1, max(0, game_rules.HEALTH_MAX - self.health))
+        left_sprite = pygame.transform.flip(self.health_frames[h_idx], True, False)
+        # Fill the complete track for every health state.
+        target_h = bar_h - 4
+        target_w = left_track.width - 8
+        left_scaled = pygame.transform.smoothscale(left_sprite, (target_w, target_h))
+        surf.blit(left_scaled, (left_track.left + 4, left_track.top + 2))
 
-        # Right health fill (Opponent: drains left-to-right)
-        opp_max = game_rules.OPPONENT_HEALTH_MAX
+        # Right health bar: scaled carrot sprite from HealthBar_SpriteSheet.png (Opponent)
         opp_hp = self.enemy_health if not self.infinite else max(1, 5 - (self.enemy_losses % 5))
-        opp_pct = max(0.0, min(1.0, opp_hp / opp_max))
-        fill_w_right = round(bar_w * opp_pct)
-        if fill_w_right > 0:
-            fill_col_opp = SECONDARY if opp_pct > 0.4 else (GOLD if opp_pct > 0.2 else DANGER)
-            right_fill = pygame.Rect(right_track.left, right_track.top + 2, fill_w_right, bar_h - 4)
-            draw_rounded_rect(surf, right_fill, fill_col_opp, radius=4)
-            pygame.draw.line(surf, mix(fill_col_opp, (255, 255, 255), 0.4), (right_fill.left + 2, right_fill.top + 2), (right_fill.right - 2, right_fill.top + 2), 2)
+        opp_idx = min(len(self.health_frames) - 1, max(0, game_rules.OPPONENT_HEALTH_MAX - opp_hp))
+        right_sprite = self.health_frames[opp_idx]
+        right_scaled = pygame.transform.smoothscale(right_sprite, (right_track.width - 8, target_h))
+        surf.blit(right_scaled, (right_track.left + 4, right_track.top + 2))
 
-        # Sub-bar carrot health frame graphics for authentic Food Court flavour
-        if self.health > 0:
-            h_idx = min(len(self.health_frames) - 1, game_rules.HEALTH_MAX - self.health)
-            h_frame = pygame.transform.flip(self.health_frames[h_idx], True, False)
-            surf.blit(h_frame, (left_track.left + 4, left_track.bottom + 6))
-        if self.enemy_health > 0 and not self.infinite:
-            opp_idx = min(len(self.health_frames) - 1, game_rules.OPPONENT_HEALTH_MAX - self.enemy_health)
-            opp_frame = self.health_frames[opp_idx]
-            surf.blit(opp_frame, opp_frame.get_rect(topright=(right_track.right - 4, right_track.bottom + 6)))
-
-        # Names with soft drop shadow
+        # Names with soft drop shadow underneath
         draw_shadow_text(surf, self.fonts["body_bold"], "Tomato", TEXT_ON_DARK, offset=2, alpha=160, topleft=(left_track.left + 4, left_track.bottom + 8))
         opp_display_name = self.enemy_name or "Opponent"
         draw_shadow_text(surf, self.fonts["body_bold"], opp_display_name, TEXT_ON_DARK, offset=2, alpha=160, topright=(right_track.right - 4, right_track.bottom + 8))
 
-        # Round Portraits on the far left and far right
+        # Round Portraits on the far left and far right with smooth circle borders
         # Left: Tomato
         tomato_p = circle_portrait(self.tomato_frames[0], HUD_PORTRAIT_D)
         p_rect_left = tomato_p.get_rect(center=HUD_PORTRAIT_LEFT)
         draw_shadow(surf, p_rect_left, radius=HUD_PORTRAIT_D // 2, offset=(0, 4), alpha=80, blur=6)
         surf.blit(tomato_p, p_rect_left)
-        pygame.draw.circle(surf, LINE_STRONG, HUD_PORTRAIT_LEFT, HUD_PORTRAIT_D // 2, 3)
+        draw_smooth_circle(surf, (0, 0, 0, 0), HUD_PORTRAIT_LEFT, HUD_PORTRAIT_D // 2, border=LINE_STRONG, border_width=3)
 
         # Right: Opponent
         opp_portrait = self.enemy_portraits.get(self.enemy_name, self.enemy_portraits["Vegetable Peeler"])
@@ -1790,16 +1849,15 @@ class Game:
         p_rect_right = opp_p.get_rect(center=HUD_PORTRAIT_RIGHT)
         draw_shadow(surf, p_rect_right, radius=HUD_PORTRAIT_D // 2, offset=(0, 4), alpha=80, blur=6)
         surf.blit(opp_p, p_rect_right)
-        pygame.draw.circle(surf, LINE_STRONG, HUD_PORTRAIT_RIGHT, HUD_PORTRAIT_D // 2, 3)
+        draw_smooth_circle(surf, (0, 0, 0, 0), HUD_PORTRAIT_RIGHT, HUD_PORTRAIT_D // 2, border=LINE_STRONG, border_width=3)
 
-        # Center Fighting Game Medallion / Timer
-        medallion_r = 34
-        med_center = (center_x, bar_y + bar_h // 2)
+        # Center Fighting Game Medallion / Timer with anti-aliased smooth circles
+        medallion_r = HUD_TIMER_RADIUS
+        med_center = HUD_TIMER_CENTER
         med_rect = pygame.Rect(0, 0, medallion_r * 2, medallion_r * 2)
         med_rect.center = med_center
         draw_shadow(surf, med_rect, radius=medallion_r, offset=(0, 4), alpha=90, blur=8)
-        pygame.draw.circle(surf, (48, 30, 20), med_center, medallion_r)
-        pygame.draw.circle(surf, GOLD, med_center, medallion_r, 3)
+        draw_smooth_circle(surf, (48, 30, 20), med_center, medallion_r, border=GOLD, border_width=3)
 
         if self._timer_running():
             secs = max(0, int(math.ceil(self.timer)))
@@ -1842,18 +1900,8 @@ class Game:
             shake_duration=FLASH_DURATION,
         )
 
-        # Dialogue card animation and placement
-        # Starts centered on screen, slides cleanly down into DIALOGUE_RECT between the tables
-        center_box = pygame.Rect(0, 0, 800, 210)
-        center_box.center = (VIRTUAL_W // 2, 330)
-
-        if self.dialogue_phase == "CENTER":
-            claim_box = center_box
-        elif self.dialogue_phase == "MOVING":
-            t = 1 - (self.dialogue_timer / DIALOGUE_MOVE_SECONDS)
-            claim_box = lerp_rect(center_box, DIALOGUE_RECT, smoothstep(t))
-        else:
-            claim_box = DIALOGUE_RECT
+        # The dialogue card stays in its final position; only paper reveal timing changes.
+        claim_box = DIALOGUE_RECT.copy()
 
         # Floating answer papers: bounded above the claim box so they never collide or overlap!
         if self.state == "GAMEPLAY" and self.dialogue_phase == "DONE":
@@ -2013,7 +2061,7 @@ class Game:
         best_str = f"Personal Best: {best:.1f}s"
         draw_text(surf, self.fonts["body_bold"], best_str, INK_SOFT, center=(card.centerx, card.top + 230))
         if self.infinite_is_best:
-            draw_chip(surf, self.fonts["small"], "★ NEW BEST RECORD ★", fill=GOLD, color=(48, 30, 12), center=(card.centerx, card.top + 272))
+            draw_chip(surf, self.fonts["small"], "NEW BEST RECORD", fill=GOLD, color=(48, 30, 12), center=(card.centerx, card.top + 272))
 
     def _draw_toasts(self, surf: pygame.Surface) -> None:
         y = 110
@@ -2334,6 +2382,7 @@ async def main() -> None:
     game.layout_buttons()
 
     running = True
+    mouse_press_handled = False
     while running:
         dt = clock.tick(120) / 1000.0
         window_size = pygame.display.get_window_size()
@@ -2343,10 +2392,14 @@ async def main() -> None:
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not portrait:
-                # Sliders need the press to begin dragging. Buttons activate on
-                # release so a focus click can still register on platforms that
-                # swallow the initial mouse-down event.
-                game.handle_press(event.pos)
+                # Activate controls on press for immediate one-click response.
+                # Keep a release fallback below for platforms that swallow the
+                # first press while the game window gains focus.
+                mouse_press_handled = game.handle_press(event.pos)
+                if not mouse_press_handled:
+                    mouse_press_handled = game.handle_click(event.pos)
+                if mouse_press_handled:
+                    game.layout_buttons()
             elif event.type == pygame.MOUSEMOTION:
                 game.mouse_pos = event.pos
                 game.handle_drag(game.mouse_pos)
@@ -2358,10 +2411,11 @@ async def main() -> None:
             elif event.type in (pygame.KEYDOWN, pygame.TEXTINPUT):
                 game.handle_key(event)
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                if game.dragging_slider is None and not portrait:
+                if not mouse_press_handled and game.dragging_slider is None and not portrait:
                     game.handle_click(event.pos)
                     game.layout_buttons()
                 game.handle_release()
+                mouse_press_handled = False
 
         if not portrait:
             game.update(dt)

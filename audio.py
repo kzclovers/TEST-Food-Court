@@ -8,6 +8,7 @@ main.py can call effects that have no file yet.
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 
 import pygame
@@ -28,6 +29,12 @@ SFX_FILES = {
     "chomp": "carrot chomp.mp3",
     "knife_hit": "Chef knife hit.mp3",
     "click": "click.mp3",
+    "knife_correct_1": "knife1.mp3",
+    "knife_correct_2": "knife2.mp3",
+    "knife_correct_3": "knife3.mp3",
+}
+SFX_GROUPS = {
+    "correct": ("knife_correct_1", "knife_correct_2", "knife_correct_3"),
 }
 
 DEFAULT_VOLUME = 0.7
@@ -45,6 +52,7 @@ class AudioManager:
         self.sfx_volume = clamp_volume(sfx_volume)
         self.current_track: str | None = None
         self.sounds: dict[str, pygame.mixer.Sound] = {}
+        self._last_group_choice: dict[str, str] = {}
         self.enabled = self._init_mixer()
         if self.enabled:
             for name, filename in SFX_FILES.items():
@@ -63,6 +71,13 @@ class AudioManager:
             return False
 
     def play_sfx(self, name: str) -> None:
+        choices = SFX_GROUPS.get(name)
+        if choices:
+            group = name
+            previous = self._last_group_choice.get(group)
+            available = tuple(choice for choice in choices if choice != previous) or choices
+            name = random.choice(available)
+            self._last_group_choice[group] = name
         sound = self.sounds.get(name)
         if sound is None or self.sfx_volume <= 0:
             return
