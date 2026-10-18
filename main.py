@@ -1414,7 +1414,7 @@ class Game:
             else:
                 x_offset = -24
 
-        surf.blit(image, (round(x_offset), 220 - image.get_height() // 2))
+        surf.blit(image, (round(x_offset), 150 - image.get_height() // 2))
 
     def _banner_surface(
         self, text: str, background: tuple[int, int, int]
@@ -1720,13 +1720,13 @@ class Game:
         if image is None:
             return
         if self.review_age < FEEDBACK_ENTER_SECONDS:
-            scale = 0.86 + 0.14 * (self.review_age / FEEDBACK_ENTER_SECONDS)
+            scale = 0.6 + 0.24 * (self.review_age / FEEDBACK_ENTER_SECONDS)
         else:
-            scale = 1.0
+            scale = 0.9
 
         dest = self._fitted_card(image, (900, 420), (VIRTUAL_W // 2, 510))
         dest = pygame.Rect(0, 0, max(1, int(dest.width * scale)), max(1, int(dest.height * scale)))
-        dest.center = (VIRTUAL_W // 2, 510)
+        dest.center = (VIRTUAL_W // 2, 450)
         scaled = pygame.transform.smoothscale(image, dest.size)
         shadow = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
         pygame.draw.rect(shadow, (20, 10, 6, 70), shadow.get_rect(), border_radius=18)
