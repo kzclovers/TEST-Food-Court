@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 # --- Tuning values -----------------------------------------------------
 
-HEALTH_MAX = 5
+HEALTH_MAX = 6
 OPPONENT_HEALTH_MAX = 5  # main levels: each correct answer removes one
 MASTERY_TARGET = 3  # correct answers needed to master a fallacy
 QUESTION_SECONDS = 10.0

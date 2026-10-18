@@ -82,14 +82,15 @@ ENEMY_SHEETS = {
 SETTINGS_PAPER_RECT = pygame.Rect(450, 50, 380, 600)
 SETTINGS_ROW_RECTS = [pygame.Rect(500, 330, 280, 50), pygame.Rect(500, 410, 280, 50)]
 
-# Connected-component bounding boxes (x, y, w, h) of the five individual
-# carrot illustrations in carrot_heath_bar.png, widest/fullest first.
+# Sprite bounds in HealthBar_SpriteSheet.png, ordered left to right from the
+# full carrot to the most depleted stub.
 HEALTH_ICON_RECTS = [
-    (193, 1145, 1044, 393),
-    (248, 638, 957, 393),
-    (427, 135, 851, 393),
-    (1424, 285, 704, 393),
-    (1594, 776, 544, 393),
+    (133, 282, 2068, 442),
+    (2552, 295, 1821, 442),
+    (4686, 291, 1668, 442),
+    (6661, 293, 1483, 442),
+    (8563, 287, 1227, 442),
+    (10202, 290, 949, 443),
 ]
 
 
@@ -482,7 +483,7 @@ class Game:
             for fid in range(1, 19)
         }
 
-        health_sheet = load_image("carrot_heath_bar.png", (2160, 1620), (214, 122, 54))
+        health_sheet = load_image("HealthBar_SpriteSheet.png", (11264, 1024), (214, 122, 54))
         self.health_frames: list[pygame.Surface] = []
         target_h = 60
         for x, y, w, h in HEALTH_ICON_RECTS:
@@ -619,7 +620,7 @@ class Game:
             self.warmup_queue = list(self.teaching_ids)
             self.rng.shuffle(self.warmup_queue)
             self.phase = "WARMUP"
-            self.toasts.append(["Warm-up: no damage yet!", TOAST_DURATION])
+            self.toasts.append(["Warm-up: mistakes cost health.", TOAST_DURATION])
             self.next_question()
 
     # -- questions ---------------------------------------------------
@@ -728,9 +729,8 @@ class Game:
             self.review_clicks = 0
             self.audio.play_sfx("correct")
         else:
-            # Warm-up misses cost nothing; the same fallacy is asked again.
-            if not warmup:
-                self.health = max(0, self.health - 1)
+            # Wrong answers always cost one health, including during warm-up.
+            self.health = max(0, self.health - 1)
             self.tomato_flash = FLASH_DURATION
             self.result_label = "TIME OUT" if timeout else "INCORRECT"
             # Show the matching dictionary card. It is not collected.
@@ -1184,10 +1184,11 @@ class Game:
             button.draw(surf, font)
 
     def _draw_hud(self, surf: pygame.Surface) -> None:
-        health_frame = self.health_frames[
-            min(len(self.health_frames) - 1, game_rules.HEALTH_MAX - self.health)
-        ]
-        surf.blit(health_frame, (92, 14))
+        if self.health > 0:
+            health_frame = self.health_frames[
+                min(len(self.health_frames) - 1, game_rules.HEALTH_MAX - self.health)
+            ]
+            surf.blit(health_frame, (92, 14))
         draw_outlined_text(surf, self.fonts["small"], "Tomato", (150, 84), width=2)
 
         if self.infinite:
@@ -1237,7 +1238,7 @@ class Game:
 
         lines = [
             "Each level teaches three new fallacies. Add all three cards",
-            "to your dictionary, then warm up -- warm-up misses cost nothing.",
+            "to your dictionary, then warm up -- wrong answers cost health.",
             "",
             "In the official round, click the moving paper that names the",
             "fallacy in each claim before the ten-second timer runs out.",
@@ -1344,7 +1345,7 @@ class Game:
 
         # The dialogue starts large in the center, then shrinks into the lower
         # speaker box where the enemy name (for example, "Peeler:") is shown.
-        voice_box = pygame.Rect(160, 570, 960, 120)
+        voice_box = pygame.Rect(160, 520, 960, 180)
         center_box = pygame.Rect(0, 0, 1080, 240)
         center_box.center = (VIRTUAL_W // 2, 300)
 
@@ -1372,10 +1373,10 @@ class Game:
 
         draw_panel(surf, claim_box, radius=16)
         speaker = self.fonts["body"].render(f"{self.enemy_name}:", True, PANEL_BORDER)
-        surf.blit(speaker, (claim_box.left + 24, claim_box.top + 12))
+        surf.blit(speaker, (claim_box.left + 24, claim_box.top + 20))
         for i, line in enumerate(wrap_text(self.current_claim, self.fonts["body"], claim_box.width - 48)[:4]):
             label = self.fonts["body"].render(line, True, TEXT_DARK)
-            surf.blit(label, (claim_box.left + 24, claim_box.top + 44 + i * 26))
+            surf.blit(label, (claim_box.left + 24, claim_box.top + 60 + i * 26))
 
         if self.state == "FEEDBACK":
             if self.review_fallacy_id is not None:
@@ -1782,7 +1783,6 @@ async def main() -> None:
     game.layout_buttons()
 
     running = True
-    mouse_press_handled = False
     while running:
         dt = clock.tick(60) / 1000.0
         window_size = screen.get_size()
@@ -1794,18 +1794,11 @@ async def main() -> None:
             elif event.type == pygame.VIDEORESIZE:
                 screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not portrait:
+                # Activate on release so a click that focuses the window still
+                # reaches the button on platforms that swallow the initial press.
                 vpos = window_to_virtual(event.pos, screen.get_size())
                 game.handle_click(vpos)
                 game.layout_buttons()
-                mouse_press_handled = True
-            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                # Some window managers consume the first press while focusing
-                # the game window. Handle the release if no press reached us.
-                if not mouse_press_handled and not portrait:
-                    vpos = window_to_virtual(event.pos, screen.get_size())
-                    game.handle_click(vpos)
-                    game.layout_buttons()
-                mouse_press_handled = False
 
         if not portrait:
             game.update(dt)

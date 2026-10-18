@@ -100,7 +100,7 @@ class GameSmokeTests(unittest.TestCase):
         self.assertLess(steps, 500)
         self.assertEqual(self.game.progress.dictionary_ids, {1, 2, 3})
         self.assertEqual(self.game.enemy_health, 0)
-        self.assertEqual(self.game.health, 5)
+        self.assertEqual(self.game.health, 6)
         self.assertIn(1, self.game.progress.completed_levels)
 
     def test_answering_incorrectly_fails_the_level(self):
@@ -129,7 +129,7 @@ class GameSmokeTests(unittest.TestCase):
         self.assertEqual(self.game.phase, "WARMUP")
         self.assertEqual(sorted(self.game.warmup_queue), [1, 2, 3])
 
-    def test_warmup_misses_cost_nothing_and_repeat_the_same_fallacy(self):
+    def test_warmup_misses_cost_health_and_repeat_the_same_fallacy(self):
         self._start_level_one_round()
         self._reveal_papers()
         first = self.game.current_fallacy_id
@@ -160,11 +160,11 @@ class GameSmokeTests(unittest.TestCase):
 
         self.game.resolve_answer(False, timeout=False)
         self._finish_feedback()
-        self.assertEqual(self.game.health, 4)
+        self.assertEqual(self.game.health, 5)
 
         self.game.resolve_answer(True, timeout=False)
         self._finish_feedback()
-        self.assertEqual(self.game.health, 4)
+        self.assertEqual(self.game.health, 5)
         self.assertEqual(self.game.enemy_health, 4)
 
     def test_official_round_only_asks_unlocked_fallacies(self):
@@ -264,11 +264,11 @@ class GameSmokeTests(unittest.TestCase):
 
         self.game.resolve_answer(False, timeout=False)
         self._finish_feedback()
-        self.assertEqual(self.game.health, 4)
+        self.assertEqual(self.game.health, 5)
         for _ in range(2):
             self.game.resolve_answer(True, timeout=False)
             self._finish_feedback()
-        self.assertEqual(self.game.health, 5)
+        self.assertEqual(self.game.health, 6)
         self._reveal_papers()
         self.assertEqual(len(self.game.papers), 5)
 
