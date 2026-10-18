@@ -48,11 +48,11 @@ OVERLAY_DARK = (16, 10, 8)
 
 FLASH_DURATION = 0.5
 GAVEL_DURATION = 1.2
-TOAST_DURATION = 3.0
+TOAST_DURATION = 2.0
 FEEDBACK_ENTER_SECONDS = 0.3
 FEEDBACK_EXIT_SECONDS = 0.3
-DIALOGUE_CENTER_SECONDS = 3.0
-DIALOGUE_MOVE_SECONDS = 0.4
+DIALOGUE_CENTER_SECONDS = 0.1
+DIALOGUE_MOVE_SECONDS = 1.0
 PAGE_TURN_SECONDS = 0.65
 CARDS_PER_SPREAD = 4  # two dictionary cards on each page of the open book
 
@@ -1229,8 +1229,10 @@ class Game:
             shake_duration=FLASH_DURATION,
         )
 
-        voice_box = pygame.Rect(60, 580, 1160, 110)
-        center_box = pygame.Rect(0, 0, 900, 220)
+        # The dialogue starts large in the center, then shrinks into the lower
+        # speaker box where the enemy name (for example, "Peeler:") is shown.
+        voice_box = pygame.Rect(160, 570, 960, 120)
+        center_box = pygame.Rect(0, 0, 1080, 240)
         center_box.center = (VIRTUAL_W // 2, 300)
 
         if self.dialogue_phase == "CENTER":
