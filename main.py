@@ -240,7 +240,7 @@ def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(
 
 
 def draw_paper(surf: pygame.Surface, rect: pygame.Rect, tilt: float = -2.5) -> None:
-    """A slightly tilted cream sheet of paper with a soft shadow, as in the mockups."""
+    
     sheet = pygame.Surface(rect.size, pygame.SRCALPHA)
     pygame.draw.rect(sheet, PAPER_FILL, sheet.get_rect(), border_radius=6)
     inner = sheet.get_rect().inflate(-24, -24)
@@ -376,13 +376,20 @@ class Paper:
             surf.blit(self.background, r)
         else:
             pygame.draw.rect(surf, PAPER_FILL, r, border_radius=10)
-        pygame.draw.rect(surf, PAPER_BORDER, r, width=2, border_radius=10)
+            pygame.draw.rect(surf, PAPER_BORDER, r, width=2, border_radius=10)
         lines = wrap_text(self.text, font, r.width - 14)[:3]
         total_h = len(lines) * (font.get_height() - 2)
         y = r.centery - total_h // 2
         for line in lines:
-            label = font.render(line, True, TEXT_DARK)
-            surf.blit(label, label.get_rect(center=(r.centerx, y + font.get_height() // 2 - 1)))
+            draw_outlined_text(
+                surf,
+                font,
+                line,
+                (r.centerx, y + font.get_height() // 2 - 1),
+                fill=(255, 255, 255),
+                outline=(0, 0, 0),
+                width=2,
+            )
             y += font.get_height() - 2
 
 
@@ -402,7 +409,7 @@ class Game:
             "large": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 40),
             "body": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 28),
             "small": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 22),
-            "paper": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 20),
+            "paper": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 18),
         }
         self.fonts["title_bold"] = pygame.font.Font(str(font_dir / "Nunito-ExtraBold.ttf"), 54)
         self.fonts["body_bold"] = pygame.font.Font(str(font_dir / "Nunito-Bold.ttf"), 28)
@@ -718,6 +725,7 @@ class Game:
         entries = [(FALLACIES_BY_ID[correct_id].name, True)]
         entries += [(FALLACIES_BY_ID[i].name, False) for i in wrong_ids]
         self.rng.shuffle(entries)
+        
         self.papers = [
             Paper(text, is_correct, PAPER_BOUNDS, self.rng, self.fallacy_paper_backgrounds)
             for text, is_correct in entries
@@ -1422,7 +1430,7 @@ class Game:
         # The dialogue starts large in the center, then shrinks into the lower
         # speaker box where the enemy name (for example, "Peeler:") is shown.
         voice_box = pygame.Rect(160, 520, 960, 180)
-        center_box = pygame.Rect(0, 0, 1080, 240)
+        center_box = pygame.Rect(160, 0, 960, 240)
         center_box.center = (VIRTUAL_W // 2, 300)
 
         if self.dialogue_phase == "CENTER":
@@ -1443,6 +1451,8 @@ class Game:
             pygame.draw.rect(surf, (235, 190, 90), fill_rect, border_radius=8)
             pygame.draw.rect(surf, PANEL_BORDER, bar_rect, width=2, border_radius=8)
 
+
+    #floating ingredients fallacies
             if not self.paused:  # no free study time behind the pause menu
                 for paper in self.papers:
                     paper.draw(surf, self.fonts["paper"])
