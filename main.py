@@ -392,17 +392,6 @@ class Paper:
             )
             y += font.get_height() - 2
 
-    def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(60, 34, 20), width=3) -> None:
-        base = font.render(text, True, outline)
-        rect = base.get_rect(center=center)
-        for dx in range(-width, width + 1):
-            for dy in range(-width, width + 1):
-                if dx * dx + dy * dy <= width * width:
-                    surf.blit(base, rect.move(dx, dy))
-        surf.blit(font.render(text, True, fill), rect)
-
-
-
 class Game:
     def __init__(self) -> None:
         self.rng = random.Random()
@@ -1465,7 +1454,7 @@ class Game:
     #floating ingredients fallacies
             if not self.paused:  # no free study time behind the pause menu
                 for paper in self.papers:
-                    paper.draw_outlined_text(surf, self.fonts["paper"], PANEL_BORDER)
+                    paper.draw(surf, self.fonts["paper"])
 
         draw_panel(surf, claim_box, radius=16)
         speaker = self.fonts["body"].render(f"{self.enemy_name}:", True, PANEL_BORDER)
