@@ -353,6 +353,8 @@ class Game:
         self.fonts["title_bold"].set_bold(True)
         self.fonts["body_bold"] = pygame.font.Font(None, 28)
         self.fonts["body_bold"].set_bold(True)
+        self.banner_cache: dict[tuple[str, tuple[int, int, int]], pygame.Surface] = {}
+        self.banner_font = pygame.font.Font(None, 96)
 
         self._load_assets()
 
@@ -415,7 +417,7 @@ class Game:
 
         health_sheet = load_image("carrot_heath_bar.png", (2160, 1620), (214, 122, 54))
         self.health_frames: list[pygame.Surface] = []
-        target_h = 60
+        target_h = 100
         for x, y, w, h in HEALTH_ICON_RECTS:
             rect = pygame.Rect(x, y, w, h).clip(health_sheet.get_rect())
             piece = health_sheet.subsurface(rect).copy()
@@ -1104,25 +1106,62 @@ class Game:
 
     def _draw_feedback_banner(self, surf: pygame.Surface) -> None:
         color = CORRECT_COLOR if self.result_correct else INCORRECT_COLOR
+        image = self._banner_surface(self.result_label, color)
         total = game_rules.FEEDBACK_HOLD_SECONDS
         elapsed = max(0.0, total - self.feedback_timer)
 
         if elapsed < FEEDBACK_ENTER_SECONDS:
             t = elapsed / FEEDBACK_ENTER_SECONDS
-            x_offset = (1 - t) * VIRTUAL_W
+            u = t - 1
+            settle = 1 + 1.18 * u ** 3 + 0.18 * u ** 2
+            x_offset = -image.get_width() + (image.get_width() - 24) * settle
         elif elapsed > total - FEEDBACK_EXIT_SECONDS:
             t = (elapsed - (total - FEEDBACK_EXIT_SECONDS)) / FEEDBACK_EXIT_SECONDS
-            x_offset = -t * VIRTUAL_W
+            x_offset = -24 + (VIRTUAL_W + 24) * t ** 3
         else:
-            x_offset = 0.0
+            x_offset = -24
 
-        bar_h = 120
-        banner = pygame.Rect(int(x_offset), 0, VIRTUAL_W, bar_h)
-        banner.centery = 220
-        pygame.draw.rect(surf, color, banner)
-        pygame.draw.rect(surf, (255, 255, 255), banner, width=4)
-        label = self.fonts["title_bold"].render(self.result_label, True, (255, 255, 255))
-        surf.blit(label, label.get_rect(center=banner.center))
+        surf.blit(image, (round(x_offset), 220 - image.get_height() // 2))
+
+    def _banner_surface(
+        self, text: str, background: tuple[int, int, int]
+    ) -> pygame.Surface:
+        """Build and cache the decorative result ribbon for its text and color."""
+        key = (text, background)
+        if key not in self.banner_cache:
+            width = VIRTUAL_W + 48
+            height = 120
+            image = pygame.Surface((width, height + 14), pygame.SRCALPHA)
+
+            pygame.draw.polygon(
+                image,
+                (39, 12, 9, 100),
+                [(0, 12), (width, height // 2 + 12), (width, height + 12), (0, height + 12)],
+            )
+            if background == CORRECT_COLOR:
+                edge, highlight, shade, accent = (30, 96, 59), (134, 190, 145), (23, 77, 48), (78, 153, 104)
+            else:
+                edge, highlight, shade, accent = (164, 47, 42), (237, 141, 106), (121, 39, 31), (218, 101, 83)
+
+            pygame.draw.polygon(
+                image,
+                edge,
+                [(0, 0), (width, 0), (width - 20, height // 2), (width, height), (0, height), (20, height // 2)],
+            )
+            pygame.draw.rect(image, background, (20, 9, width - 40, height - 18))
+            pygame.draw.line(image, highlight, (24, 12), (width - 24, 12), 2)
+            pygame.draw.line(image, shade, (24, height - 10), (width - 24, height - 10), 3)
+            for x in (75, 105, width - 125, width - 95):
+                pygame.draw.polygon(
+                    image,
+                    accent,
+                    [(x, 28), (x + 10, 28), (x - 14, height - 28), (x - 24, height - 28)],
+                )
+
+            label = self.banner_font.render(text, True, (255, 246, 229))
+            image.blit(label, label.get_rect(center=(width // 2, height // 2)))
+            self.banner_cache[key] = image
+        return self.banner_cache[key]
 
     def _draw_gavel(self, surf: pygame.Surface) -> None:
         progress = 1 - max(0.0, self.gavel_timer) / GAVEL_DURATION
