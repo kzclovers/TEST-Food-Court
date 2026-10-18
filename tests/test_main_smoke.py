@@ -129,13 +129,13 @@ class GameSmokeTests(unittest.TestCase):
         self.assertEqual(self.game.phase, "WARMUP")
         self.assertEqual(sorted(self.game.warmup_queue), [1, 2, 3])
 
-    def test_warmup_misses_cost_health_and_repeat_the_same_fallacy(self):
+    def test_warmup_misses_are_free_and_repeat_the_same_fallacy(self):
         self._start_level_one_round()
         self._reveal_papers()
         first = self.game.current_fallacy_id
 
         self.game.resolve_answer(False, timeout=False)
-        self.assertEqual(self.game.health, 5)
+        self.assertEqual(self.game.health, 6)
         self._finish_feedback()
         self.assertEqual(self.game.current_fallacy_id, first)
         self.assertEqual(self.game.phase, "WARMUP")
@@ -217,11 +217,46 @@ class GameSmokeTests(unittest.TestCase):
         self.game.handle_click(continue_button.rect.center)
         self.assertFalse(self.game.paused)
 
-    def test_exiting_a_main_level_shows_level_failed(self):
+    def test_warmup_has_no_time_limit(self):
+        self._start_level_one_round()
+        self._reveal_papers()
+        self.game.update(60.0)
+        self.assertEqual(self.game.state, "GAMEPLAY")
+        self.assertFalse(self.game.answered)
+
+    def test_replaying_a_known_level_skips_cards_and_warmup(self):
+        self.game.progress.dictionary_ids.update({1, 2, 3})
+        self.game._open_level_select()
+        self.game._select_level(1)
+        self.assertEqual(self.game.state, "GAMEPLAY")
+        self.assertEqual(self.game.phase, "ROUND")
+
+    def test_dev_mode_unlocks_everything_without_saving(self):
+        self.game.dev_input = "wrong"
+        self.game.submit_dev_password()
+        self.assertFalse(self.game.dev_unlocked)
+        self.game.dev_input = "dev67"
+        self.game.submit_dev_password()
+        self.assertTrue(self.game.dev_unlocked)
+        self.game._toggle_dev_mode()
+        self.assertTrue(self.game._level_unlocked(6))
+        self.assertEqual(len(self.game._dictionary_entries()), 18)
+        self.assertTrue(self.game._infinite_available())
+        self.assertEqual(self.game.progress.dictionary_ids, set())
+        self.game._toggle_dev_mode()
+        self.assertFalse(self.game._level_unlocked(6))
+        self.assertEqual(self.game._dictionary_entries(), [])
+
+    def test_settings_page_lays_out_and_draws(self):
+        self.game._open_settings()
+        self.game.layout_buttons()
+        self.game.draw(self.canvas)
+
+    def test_exiting_a_main_level_returns_to_level_select(self):
         self._start_level_one_round()
         self.game._pause()
         self.game._exit_level()
-        self.assertEqual(self.game.state, "LEVEL_FAILED")
+        self.assertEqual(self.game.state, "LEVEL_SELECT")
         self.assertNotIn(1, self.game.progress.completed_levels)
         self.game.layout_buttons()
         self.game.draw(self.canvas)
