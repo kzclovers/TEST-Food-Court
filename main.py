@@ -53,12 +53,12 @@ DIALOGUE_MOVE_SECONDS = 1.0
 PAGE_TURN_SECONDS = 0.65
 CARDS_PER_SPREAD = 4  # two dictionary cards on each page of the open book
 
-# Open-book art (`Untitled_Artwork 9.png`) is a square canvas. These rects
-# are in that image's pixel space: the crop is the opaque book, and the
-# page rects sit on the cream of each page, below the binder rings.
-BOOK_CROP = pygame.Rect(162, 294, 1724, 1366)
-LEFT_PAGE_SRC = pygame.Rect(250, 660, 700, 900)
-RIGHT_PAGE_SRC = pygame.Rect(1102, 660, 688, 900)
+# Open-book art (`Untitled_Artwork 9.png`) uses a 3300x2550 canvas. These
+# rects are in source-image pixels: the crop contains the full book and the
+# page areas leave room for the rings and page edges.
+BOOK_CROP = pygame.Rect(108, 0, 3084, 2550)
+LEFT_PAGE_SRC = pygame.Rect(264, 684, 1252, 1680)
+RIGHT_PAGE_SRC = pygame.Rect(1789, 684, 1230, 1680)
 BOOK_MAX = (1080, 690)
 
 PAPER_BOUNDS = pygame.Rect(230, 320, 820, 230)
@@ -2050,21 +2050,13 @@ class Game:
         pygame.draw.circle(surf, (255, 255, 255), (knob_x, switch.centery), r)
 
 
-def window_to_virtual(pos: tuple[int, int], window_size: tuple[int, int]) -> tuple[int, int]:
-    ww, wh = window_size
-    scale = min(ww / VIRTUAL_W, wh / VIRTUAL_H)
-    draw_w, draw_h = VIRTUAL_W * scale, VIRTUAL_H * scale
-    offset_x = (ww - draw_w) / 2
-    offset_y = (wh - draw_h) / 2
-    vx = (pos[0] - offset_x) / scale if scale else 0
-    vy = (pos[1] - offset_y) / scale if scale else 0
-    return vx, vy
-
-
 async def main() -> None:
     pygame.init()
     pygame.display.set_caption("Food Court")
-    screen = pygame.display.set_mode((VIRTUAL_W, VIRTUAL_H), pygame.RESIZABLE)
+    # Let SDL scale the virtual canvas and synchronize presentation to the
+    # display when the active renderer supports it.
+    display_flags = pygame.RESIZABLE | pygame.SCALED
+    screen = pygame.display.set_mode((VIRTUAL_W, VIRTUAL_H), display_flags, vsync=1)
     clock = pygame.time.Clock()
     canvas = pygame.Surface((VIRTUAL_W, VIRTUAL_H))
 
@@ -2073,28 +2065,26 @@ async def main() -> None:
 
     running = True
     while running:
-        dt = clock.tick(60) / 1000.0
-        window_size = screen.get_size()
+        dt = clock.tick(120) / 1000.0
+        window_size = pygame.display.get_window_size()
         portrait = window_size[1] > window_size[0]
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.VIDEORESIZE:
-                screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not portrait:
                 # Activate on release so a click that focuses the window still
                 # reaches the button on platforms that swallow the initial press.
-                vpos = window_to_virtual(event.pos, screen.get_size())
+                vpos = event.pos
                 if not game.handle_press(vpos):
                     game.handle_click(vpos)
                 game.layout_buttons()
             elif event.type == pygame.MOUSEMOTION:
-                game.mouse_pos = window_to_virtual(event.pos, screen.get_size())
+                game.mouse_pos = event.pos
                 game.handle_drag(game.mouse_pos)
             elif event.type in (pygame.KEYDOWN, pygame.TEXTINPUT):
                 game.handle_key(event)
-            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 game.handle_release()
 
         if not portrait:
@@ -2109,11 +2099,8 @@ async def main() -> None:
         else:
             game.draw(canvas)
 
-        scale = min(window_size[0] / VIRTUAL_W, window_size[1] / VIRTUAL_H)
-        draw_w, draw_h = int(VIRTUAL_W * scale), int(VIRTUAL_H * scale)
-        scaled = pygame.transform.smoothscale(canvas, (draw_w, draw_h))
         screen.fill((0, 0, 0))
-        screen.blit(scaled, ((window_size[0] - draw_w) // 2, (window_size[1] - draw_h) // 2))
+        screen.blit(canvas, (0, 0))
 
         pygame.display.flip()
         await asyncio.sleep(0)
