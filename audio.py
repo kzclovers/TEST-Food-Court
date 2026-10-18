@@ -1,33 +1,96 @@
-"""Audio interface used by main.py.
+"""Audio playback used by main.py.
 
-No sound assets or generated tones exist yet -- every method here is a
-silent no-op so the rest of the game can call into a stable interface
-now and have real music/sound effects dropped in later without touching
-main.py. See SPEC.md's Audio sections for the sounds this will need:
-selecting an answer, correct, incorrect, health loss, dictionary
-confirmation, mastery, level transitions, failure, and completion, plus
-a distinct background music track per enemy.
+Music streams through pygame.mixer.music; sound effects are preloaded
+Sound objects. Every call is safe when the mixer is unavailable (headless
+tests, blocked browser audio), and unknown sound names are ignored so
+main.py can call effects that have no file yet.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pygame
+
+ASSET_DIR = Path(__file__).resolve().parent / "assets"
+MUSIC_DIR = ASSET_DIR / "music"
+SFX_DIR = ASSET_DIR / "sound effects"
+
+MUSIC_FILES = {
+    "main": "main theme.mp3",
+    "infinite": "infinite theme.mp3",
+    "veggie_skinner": "veggie skinner theme.mp3",
+    "knife": "knife theme.mp3",
+    "boiling_pot": "boiling pot theme.mp3",
+}
+
+SFX_FILES = {
+    "chomp": "carrot chomp.mp3",
+    "knife_hit": "Chef knife hit.mp3",
+    "click": "click.mp3",
+}
+
+DEFAULT_VOLUME = 0.7
+
+
+def clamp_volume(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
 
 class AudioManager:
-    def __init__(self) -> None:
-        self.music_on = True
-        self.sfx_on = True
+    def __init__(self, music_volume: float = DEFAULT_VOLUME, sfx_volume: float = DEFAULT_VOLUME) -> None:
+        self.music_volume = clamp_volume(music_volume)
+        self.sfx_volume = clamp_volume(sfx_volume)
+        self.current_track: str | None = None
+        self.sounds: dict[str, pygame.mixer.Sound] = {}
+        self.enabled = self._init_mixer()
+        if self.enabled:
+            for name, filename in SFX_FILES.items():
+                try:
+                    self.sounds[name] = pygame.mixer.Sound(str(SFX_DIR / filename))
+                except (pygame.error, FileNotFoundError):
+                    pass
+
+    @staticmethod
+    def _init_mixer() -> bool:
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            return True
+        except pygame.error:
+            return False
 
     def play_sfx(self, name: str) -> None:
-        """Play a named sound effect. No-op until sounds are authored."""
+        sound = self.sounds.get(name)
+        if sound is None or self.sfx_volume <= 0:
+            return
+        sound.set_volume(self.sfx_volume)
+        sound.play()
 
     def play_music(self, track: str) -> None:
-        """Start a named music track. No-op until music is authored."""
+        """Loop a named track; calling again with the playing track is a no-op."""
+        if track == self.current_track or not self.enabled:
+            return
+        filename = MUSIC_FILES.get(track)
+        if filename is None:
+            return
+        try:
+            pygame.mixer.music.load(str(MUSIC_DIR / filename))
+            pygame.mixer.music.set_volume(self.music_volume)
+            pygame.mixer.music.play(loops=-1)
+        except (pygame.error, FileNotFoundError):
+            return
+        self.current_track = track
 
     def stop_music(self) -> None:
-        pass
+        if self.enabled:
+            pygame.mixer.music.stop()
+        self.current_track = None
 
-    def set_music_enabled(self, enabled: bool) -> None:
-        self.music_on = enabled
+    def set_music_volume(self, volume: float) -> None:
+        self.music_volume = clamp_volume(volume)
+        if self.enabled:
+            pygame.mixer.music.set_volume(self.music_volume)
 
-    def set_sfx_enabled(self, enabled: bool) -> None:
-        self.sfx_on = enabled
+    def set_sfx_volume(self, volume: float) -> None:
+        self.sfx_volume = clamp_volume(volume)

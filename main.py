@@ -81,6 +81,11 @@ ENEMY_SHEETS = {
 }
 SETTINGS_PAPER_RECT = pygame.Rect(450, 50, 380, 600)
 SETTINGS_ROW_RECTS = [pygame.Rect(500, 330, 280, 50), pygame.Rect(500, 410, 280, 50)]
+# Slider track per settings row: the label sits above, the track below it.
+SETTINGS_SLIDER_RECTS = [pygame.Rect(r.left + 10, r.bottom - 12, r.width - 20, 8) for r in SETTINGS_ROW_RECTS]
+# Music track per level; infinite mode uses its own theme.
+LEVEL_MUSIC = {1: "veggie_skinner", 2: "veggie_skinner", 3: "knife", 4: "knife", 5: "boiling_pot", 6: "boiling_pot"}
+LEVEL_MUSIC_STATES = ("TEACHING", "GAMEPLAY", "FEEDBACK", "GAVEL")
 
 # Sprite bounds in HealthBar_SpriteSheet.png, ordered left to right from the
 # full carrot to the most depleted stub.
@@ -384,8 +389,9 @@ class Paper:
 class Game:
     def __init__(self) -> None:
         self.rng = random.Random()
-        self.audio = AudioManager()
         self.progress = Progress()
+        self.audio = AudioManager(self.progress.music_volume, self.progress.sfx_volume)
+        self.dragging_slider: int | None = None
         self.selector = FallacySelector()
 
         # Keep the selected font files inside the project so desktop and browser
@@ -746,6 +752,8 @@ class Game:
                 self.enemy_health = max(0, self.enemy_health - 1)
             else:
                 self.enemy_health = max(0, self.enemy_health - 1)
+            if not self.infinite:
+                self.audio.play_sfx("chomp")
             self.enemy_losses += 1
             self.enemy_flash = FLASH_DURATION
             self.result_label = "CORRECT"
@@ -755,6 +763,7 @@ class Game:
         else:
             # Wrong answers always cost one health, including during warm-up.
             self.health = max(0, self.health - 1)
+            self.audio.play_sfx("chomp")
             self.tomato_flash = FLASH_DURATION
             self.result_label = "TIME OUT" if timeout else "INCORRECT"
             # Show the matching dictionary card. It is not collected.
@@ -806,6 +815,7 @@ class Game:
         self.gavel_target = target
         self.gavel_timer = GAVEL_DURATION
         self.state = "GAVEL"
+        self.audio.play_sfx("knife_hit")
 
     def finish_infinite(self) -> None:
         survived = (pygame.time.get_ticks() - self.infinite_start_ms) / 1000.0
@@ -842,7 +852,16 @@ class Game:
 
     # -- update ---------------------------------------------------
 
+    def _desired_music(self) -> str | None:
+        state = self.pre_settings_state if self.state == "SETTINGS" else self.state
+        if state in LEVEL_MUSIC_STATES:
+            return "infinite" if self.infinite else LEVEL_MUSIC.get(self.level, "main")
+        return "main"
+
     def update(self, dt: float) -> None:
+        track = self._desired_music()
+        if track is not None:
+            self.audio.play_music(track)
         if self.paused:
             return
         if self.state == "GAMEPLAY" and not self.answered:
@@ -1006,8 +1025,6 @@ class Game:
     def _layout_settings_buttons(self) -> None:
         self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._close_settings,
                                    style="icon", icon="return"))
-        for rect, action in zip(SETTINGS_ROW_RECTS, (self._toggle_music, self._toggle_sfx)):
-            self.buttons.append(Button(rect, "", action, style="hidden"))
         if self.show_reset_confirm:
             self.buttons.append(Button(pygame.Rect(505, 530, 130, 46), "Yes, Reset", self._confirm_reset))
             self.buttons.append(Button(pygame.Rect(645, 530, 130, 46), "Cancel", self._cancel_reset))
@@ -1087,11 +1104,39 @@ class Game:
         self.show_reset_confirm = False
         self.state = self.pre_settings_state
 
-    def _toggle_music(self) -> None:
-        self.audio.set_music_enabled(not self.audio.music_on)
+    def _set_slider(self, index: int, x: float) -> None:
+        track = SETTINGS_SLIDER_RECTS[index]
+        volume = max(0.0, min(1.0, (x - track.left) / track.width))
+        if index == 0:
+            self.audio.set_music_volume(volume)
+        else:
+            self.audio.set_sfx_volume(volume)
 
-    def _toggle_sfx(self) -> None:
-        self.audio.set_sfx_enabled(not self.audio.sfx_on)
+    def _save_volumes(self) -> None:
+        self.progress.music_volume = self.audio.music_volume
+        self.progress.sfx_volume = self.audio.sfx_volume
+        self.progress.save()
+
+    def handle_press(self, pos: tuple[int, int]) -> bool:
+        """Start a volume-slider drag; returns True when the press hit a slider."""
+        if self.state != "SETTINGS":
+            return False
+        for i, row in enumerate(SETTINGS_ROW_RECTS):
+            if row.inflate(0, 10).collidepoint(pos):
+                self.dragging_slider = i
+                self._set_slider(i, pos[0])
+                return True
+        return False
+
+    def handle_drag(self, pos: tuple[int, int]) -> None:
+        if self.dragging_slider is not None:
+            self._set_slider(self.dragging_slider, pos[0])
+
+    def handle_release(self) -> None:
+        if self.dragging_slider is not None:
+            self.dragging_slider = None
+            self._save_volumes()
+            self.audio.play_sfx("click")
 
     def _ask_reset(self) -> None:
         self.show_reset_confirm = True
@@ -1145,6 +1190,7 @@ class Game:
     def handle_click(self, pos: tuple[int, int]) -> None:
         for button in self.buttons:
             if button.enabled and button.rect.collidepoint(pos):
+                self.audio.play_sfx("click")
                 button.action()
                 return
         if not self.paused and not self.show_dictionary and self.state != "SETTINGS":
@@ -1774,15 +1820,20 @@ class Game:
         title = self.fonts["large"].render("Settings", True, TEXT_DARK)
         surf.blit(title, title.get_rect(center=(paper.centerx, paper.top + 200)))
 
-        rows = (("Background Music", self.audio.music_on), ("Sound Effects", self.audio.sfx_on))
-        for rect, (text, on) in zip(SETTINGS_ROW_RECTS, rows):
-            label = self.fonts["body"].render(text, True, (70, 55, 40))
-            surf.blit(label, label.get_rect(midleft=(rect.left, rect.centery)))
-            switch = pygame.Rect(0, 0, 64, 32)
-            switch.midright = (rect.right, rect.centery)
-            pygame.draw.rect(surf, CORRECT_COLOR if on else (170, 160, 150), switch, border_radius=16)
-            knob_x = switch.right - 16 if on else switch.left + 16
-            pygame.draw.circle(surf, (255, 255, 255), (knob_x, switch.centery), 12)
+        rows = (("Music", self.audio.music_volume), ("Sound Effects", self.audio.sfx_volume))
+        for rect, track, (text, volume) in zip(SETTINGS_ROW_RECTS, SETTINGS_SLIDER_RECTS, rows):
+            label = self.fonts["small"].render(text, True, (70, 55, 40))
+            surf.blit(label, label.get_rect(topleft=(rect.left, rect.top - 4)))
+            pct = self.fonts["small"].render(f"{round(volume * 100)}%", True, (70, 55, 40))
+            surf.blit(pct, pct.get_rect(topright=(rect.right, rect.top - 4)))
+            pygame.draw.rect(surf, (170, 160, 150), track, border_radius=4)
+            filled = track.copy()
+            filled.width = round(track.width * volume)
+            if filled.width:
+                pygame.draw.rect(surf, CORRECT_COLOR, filled, border_radius=4)
+            knob = (track.left + filled.width, track.centery)
+            pygame.draw.circle(surf, (255, 255, 255), knob, 11)
+            pygame.draw.circle(surf, (120, 100, 80), knob, 11, 2)
             pygame.draw.line(surf, (215, 200, 180), (rect.left, rect.bottom + 6), (rect.right, rect.bottom + 6), 1)
 
         if self.show_reset_confirm:
@@ -1827,8 +1878,13 @@ async def main() -> None:
                 # Activate on release so a click that focuses the window still
                 # reaches the button on platforms that swallow the initial press.
                 vpos = window_to_virtual(event.pos, screen.get_size())
-                game.handle_click(vpos)
+                if not game.handle_press(vpos):
+                    game.handle_click(vpos)
                 game.layout_buttons()
+            elif event.type == pygame.MOUSEMOTION:
+                game.handle_drag(window_to_virtual(event.pos, screen.get_size()))
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                game.handle_release()
 
         if not portrait:
             game.update(dt)
