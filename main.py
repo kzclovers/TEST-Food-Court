@@ -372,19 +372,20 @@ class Game:
         self.progress = Progress()
         self.selector = FallacySelector()
 
+        # Keep the selected font files inside the project so desktop and browser
+        # builds use the same Nunito faces.
+        font_dir = ASSET_DIR / "Nunito" / "static"
         self.fonts = {
-            "title": pygame.font.Font(None, 54),
-            "large": pygame.font.Font(None, 40),
-            "body": pygame.font.Font(None, 28),
-            "small": pygame.font.Font(None, 22),
-            "paper": pygame.font.Font(None, 20),
+            "title": pygame.font.Font(str(font_dir / "Nunito-Bold.ttf"), 54),
+            "large": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 40),
+            "body": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 28),
+            "small": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 22),
+            "paper": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 20),
         }
-        self.fonts["title_bold"] = pygame.font.Font(None, 54)
-        self.fonts["title_bold"].set_bold(True)
-        self.fonts["body_bold"] = pygame.font.Font(None, 28)
-        self.fonts["body_bold"].set_bold(True)
+        self.fonts["title_bold"] = pygame.font.Font(str(font_dir / "Nunito-ExtraBold.ttf"), 54)
+        self.fonts["body_bold"] = pygame.font.Font(str(font_dir / "Nunito-Bold.ttf"), 28)
         self.banner_cache: dict[tuple[str, tuple[int, int, int]], pygame.Surface] = {}
-        self.banner_font = pygame.font.Font(None, 84)
+        self.banner_font = pygame.font.Font(str(font_dir / "Nunito-ExtraBold.ttf"), 84)
 
         self._load_assets()
 
