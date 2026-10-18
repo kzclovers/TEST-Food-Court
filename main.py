@@ -1849,21 +1849,13 @@ class Game:
                 surf.blit(warn, warn.get_rect(center=(paper.centerx, 486 + i * 20)))
 
 
-def window_to_virtual(pos: tuple[int, int], window_size: tuple[int, int]) -> tuple[int, int]:
-    ww, wh = window_size
-    scale = min(ww / VIRTUAL_W, wh / VIRTUAL_H)
-    draw_w, draw_h = VIRTUAL_W * scale, VIRTUAL_H * scale
-    offset_x = (ww - draw_w) / 2
-    offset_y = (wh - draw_h) / 2
-    vx = (pos[0] - offset_x) / scale if scale else 0
-    vy = (pos[1] - offset_y) / scale if scale else 0
-    return vx, vy
-
-
 async def main() -> None:
     pygame.init()
     pygame.display.set_caption("Food Court")
-    screen = pygame.display.set_mode((VIRTUAL_W, VIRTUAL_H), pygame.RESIZABLE)
+    # SCALED lets SDL present the fixed virtual canvas at the window size and
+    # makes a VSync request possible on supported desktop display backends.
+    display_flags = pygame.RESIZABLE | pygame.SCALED
+    screen = pygame.display.set_mode((VIRTUAL_W, VIRTUAL_H), display_flags, vsync=1)
     clock = pygame.time.Clock()
     canvas = pygame.Surface((VIRTUAL_W, VIRTUAL_H))
 
@@ -1873,23 +1865,23 @@ async def main() -> None:
     running = True
     while running:
         dt = clock.tick(60) / 1000.0
-        window_size = screen.get_size()
+        window_size = pygame.display.get_window_size()
         portrait = window_size[1] > window_size[0]
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.VIDEORESIZE:
-                screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not portrait:
                 # Activate on release so a click that focuses the window still
                 # reaches the button on platforms that swallow the initial press.
-                vpos = window_to_virtual(event.pos, screen.get_size())
+                # SCALED display mode already converts mouse coordinates to
+                # the virtual canvas coordinate space.
+                vpos = event.pos
                 if not game.handle_press(vpos):
                     game.handle_click(vpos)
                 game.layout_buttons()
             elif event.type == pygame.MOUSEMOTION:
-                game.handle_drag(window_to_virtual(event.pos, screen.get_size()))
+                game.handle_drag(event.pos)
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 game.handle_release()
 
