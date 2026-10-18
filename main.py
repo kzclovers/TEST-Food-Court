@@ -229,7 +229,7 @@ def draw_icon(surf: pygame.Surface, name: str, center: tuple[int, int], size: in
         pygame.draw.rect(surf, color, right, w, border_radius=2)
 
 
-def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(60, 34, 20), width=3) -> None:
+def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(60, 34, 20), width=1) -> None:
     base = font.render(text, True, outline)
     rect = base.get_rect(center=center)
     for dx in range(-width, width + 1):
@@ -386,11 +386,21 @@ class Paper:
                 font,
                 line,
                 (r.centerx, y + font.get_height() // 2 - 1),
-                fill=(255, 255, 255),
-                outline=(0, 0, 0),
-                width=2,
+                fill=TEXT_DARK,
+                outline=PAPER_FILL,
+                width=1,
             )
             y += font.get_height() - 2
+
+    def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(60, 34, 20), width=3) -> None:
+        base = font.render(text, True, outline)
+        rect = base.get_rect(center=center)
+        for dx in range(-width, width + 1):
+            for dy in range(-width, width + 1):
+                if dx * dx + dy * dy <= width * width:
+                    surf.blit(base, rect.move(dx, dy))
+        surf.blit(font.render(text, True, fill), rect)
+
 
 
 class Game:
@@ -760,8 +770,6 @@ class Game:
                 self.enemy_health = max(0, self.enemy_health - 1)
             else:
                 self.enemy_health = max(0, self.enemy_health - 1)
-            if not self.infinite:
-                self.audio.play_sfx("chomp")
             self.enemy_losses += 1
             self.enemy_flash = FLASH_DURATION
             self.result_label = "CORRECT"
@@ -1033,6 +1041,8 @@ class Game:
     def _layout_settings_buttons(self) -> None:
         self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._close_settings,
                                    style="icon", icon="return"))
+        for rect, action in zip(SETTINGS_ROW_RECTS, (self._toggle_music, self._toggle_sfx)):
+            self.buttons.append(Button(rect, "", action, style="hidden"))
         if self.show_reset_confirm:
             self.buttons.append(Button(pygame.Rect(505, 530, 130, 46), "Yes, Reset", self._confirm_reset))
             self.buttons.append(Button(pygame.Rect(645, 530, 130, 46), "Cancel", self._cancel_reset))
@@ -1455,7 +1465,7 @@ class Game:
     #floating ingredients fallacies
             if not self.paused:  # no free study time behind the pause menu
                 for paper in self.papers:
-                    paper.draw(surf, self.fonts["paper"])
+                    paper.draw_outlined_text(surf, self.fonts["paper"], PANEL_BORDER)
 
         draw_panel(surf, claim_box, radius=16)
         speaker = self.fonts["body"].render(f"{self.enemy_name}:", True, PANEL_BORDER)
