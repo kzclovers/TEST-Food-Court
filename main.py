@@ -22,6 +22,8 @@ import game_rules
 from audio import AudioManager
 from game_data import FALLACIES, FALLACIES_BY_ID
 from game_rules import FallacySelector
+from entities.chef import Chef
+from entities.tomato import Tomato
 from progress import Progress
 
 ASSET_DIR = Path(__file__).parent / "assets"
@@ -262,16 +264,24 @@ class Game:
             self.health_frames.append(pygame.transform.smoothscale(piece, (target_w, target_h)))
 
         peeler_sheet = load_image("Peeler_SpriteSheet.png", (1024, 1024), (200, 140, 90))
-        tomato_sheet = load_image("Tomato_SpriteSheet.png", (1024, 1024), (200, 70, 60))
-        chef_sheet = load_image("Chef_SpriteSheet.png", (1024, 1024), (230, 200, 170))
-
         self.peeler_frames = slice_sheet(peeler_sheet, 5)
-        self.tomato_frames = slice_sheet(tomato_sheet, 5)
-        self.chef_frames = slice_sheet(chef_sheet, 3)
+        self.tomato = Tomato(ASSET_DIR / "Tomato_SpriteSheet.png")
+        self.chef = Chef(path=ASSET_DIR / "Chef_SpriteSheet.png")
+        self.tomato_frames = self.tomato.frames
+        self.chef_frames = self.chef.frames
 
         self.peeler_frames = [scale_square(f, CHARACTER_SIZE) for f in self.peeler_frames]
         self.tomato_frames = [scale_square(f, CHARACTER_SIZE) for f in self.tomato_frames]
-        self.chef_frames = [scale_square(f, CHEF_SIZE) for f in self.chef_frames]
+        self.chef_frames = [
+            pygame.transform.smoothscale(
+                frame,
+                (
+                    max(1, round(frame.get_width() * CHEF_SIZE / frame.get_height())),
+                    CHEF_SIZE,
+                ),
+            )
+            for frame in self.chef_frames
+        ]
 
     # -- level/session setup ---------------------------------------------
 
@@ -739,8 +749,15 @@ class Game:
         chef = self.chef_frames[0]
         surf.blit(chef, chef.get_rect(midbottom=CHEF_ANCHOR))
 
-        tomato = self._tomato_frame()
-        surf.blit(tomato, tomato.get_rect(midbottom=TOMATO_ANCHOR))
+        self.tomato.draw(
+            surf,
+            self.health,
+            TOMATO_ANCHOR,
+            width=CHARACTER_SIZE,
+            mistake=self.tomato_flash > 0,
+            shake_time=FLASH_DURATION - self.tomato_flash,
+            shake_duration=FLASH_DURATION,
+        )
 
         enemy = pygame.transform.flip(self._enemy_frame(), True, False)
         surf.blit(enemy, enemy.get_rect(midbottom=ENEMY_ANCHOR))
