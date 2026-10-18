@@ -50,6 +50,8 @@ GAVEL_DURATION = 1.2
 TOAST_DURATION = 3.0
 FEEDBACK_ENTER_SECONDS = 0.3
 FEEDBACK_EXIT_SECONDS = 0.3
+DIALOGUE_CENTER_SECONDS = 3.0
+DIALOGUE_MOVE_SECONDS = 0.4
 
 PAPER_BOUNDS = pygame.Rect(230, 320, 820, 230)
 CHEF_ANCHOR = (640, 500)
@@ -57,6 +59,12 @@ TOMATO_ANCHOR = (190, 560)
 ENEMY_ANCHOR = (1090, 560)
 CHARACTER_SIZE = 230
 CHEF_SIZE = 400
+
+LEVEL_CIRCLE_RECTS = [
+    pygame.Rect(150, 300, 220, 220),
+    pygame.Rect(530, 300, 220, 220),
+    pygame.Rect(910, 300, 220, 220),
+]
 
 # Connected-component bounding boxes (x, y, w, h) of the five individual
 # carrot illustrations in carrot_heath_bar.png, widest/fullest first.
@@ -116,6 +124,16 @@ def draw_panel(surf: pygame.Surface, rect: pygame.Rect, radius: int = 18) -> Non
     pygame.draw.rect(surf, PANEL_BORDER, rect, width=3, border_radius=radius)
 
 
+def lerp_rect(a: pygame.Rect, b: pygame.Rect, t: float) -> pygame.Rect:
+    t = max(0.0, min(1.0, t))
+    return pygame.Rect(
+        round(a.left + (b.left - a.left) * t),
+        round(a.top + (b.top - a.top) * t),
+        round(a.width + (b.width - a.width) * t),
+        round(a.height + (b.height - a.height) * t),
+    )
+
+
 def draw_sparkle(surf: pygame.Surface, center: tuple[int, int], size: int, color) -> None:
     """A small four-line asterisk/sparkle accent, as seen on teaching cards."""
     cx, cy = center
@@ -126,19 +144,20 @@ def draw_sparkle(surf: pygame.Surface, center: tuple[int, int], size: int, color
 
 
 class Button:
-    __slots__ = ("rect", "label", "action", "enabled")
+    __slots__ = ("rect", "label", "action", "enabled", "radius")
 
-    def __init__(self, rect: pygame.Rect, label: str, action, enabled: bool = True):
+    def __init__(self, rect: pygame.Rect, label: str, action, enabled: bool = True, radius: int = 14):
         self.rect = rect
         self.label = label
         self.action = action
         self.enabled = enabled
+        self.radius = radius
 
     def draw(self, surf: pygame.Surface, font: pygame.font.Font) -> None:
         fill = BUTTON_FILL if self.enabled else (150, 130, 110)
         border = BUTTON_BORDER if self.enabled else (110, 95, 80)
-        pygame.draw.rect(surf, fill, self.rect, border_radius=14)
-        pygame.draw.rect(surf, border, self.rect, width=3, border_radius=14)
+        pygame.draw.rect(surf, fill, self.rect, border_radius=self.radius)
+        pygame.draw.rect(surf, border, self.rect, width=3, border_radius=self.radius)
         label = font.render(self.label, True, BUTTON_TEXT)
         surf.blit(label, label.get_rect(center=self.rect.center))
 
@@ -212,8 +231,8 @@ class Game:
         self.buttons: list[Button] = []
         self.show_dictionary = False
         self.dictionary_page = 0
-        self.show_settings = False
         self.show_reset_confirm = False
+        self.pre_settings_state = "MENU"
 
         self.state = "INTRO"
         self.level = 1
@@ -245,8 +264,11 @@ class Game:
         self.infinite_start_ms = 0
         self.infinite_survived = 0.0
         self.infinite_is_best = False
+        self.dialogue_phase = "DONE"
+        self.dialogue_timer = 0.0
 
         self.start_level(1, infinite=False)
+        self.state = "MENU"
 
     # -- asset loading ---------------------------------------------------
 
@@ -314,8 +336,9 @@ class Game:
         self.toasts = []
         self.last_claim_for = {}
         self.show_dictionary = False
-        self.show_settings = False
         self.show_reset_confirm = False
+        self.dialogue_phase = "DONE"
+        self.dialogue_timer = 0.0
 
         if infinite:
             self.infinite_start_ms = pygame.time.get_ticks()
@@ -364,7 +387,7 @@ class Game:
 
         self.current_fallacy_id = fid
         self.current_claim = claim
-        self._build_papers(fid)
+        self.papers = []
 
         if self.infinite:
             self.timer_max = game_rules.infinite_question_seconds(self.question_index)
@@ -372,7 +395,26 @@ class Game:
             self.timer_max = game_rules.QUESTION_SECONDS
         self.timer = self.timer_max
         self.answered = False
+        self.dialogue_phase = "CENTER"
+        self.dialogue_timer = DIALOGUE_CENTER_SECONDS
         self.state = "GAMEPLAY"
+
+    def _advance_dialogue(self, dt: float) -> None:
+        """Center claim text for a beat, slide it down, then reveal papers.
+
+        The answer timer only starts once the papers are built, in the
+        DONE phase (see update()).
+        """
+        self.dialogue_timer -= dt
+        if self.dialogue_timer > 0:
+            return
+        if self.dialogue_phase == "CENTER":
+            self.dialogue_phase = "MOVING"
+            self.dialogue_timer = DIALOGUE_MOVE_SECONDS
+        elif self.dialogue_phase == "MOVING":
+            self.dialogue_phase = "DONE"
+            self._build_papers(self.current_fallacy_id)
+            self.timer = self.timer_max
 
     def _build_papers(self, correct_id: int) -> None:
         wrong_count = game_rules.wrong_option_count(self.level)
@@ -384,7 +426,7 @@ class Game:
         self.papers = [Paper(text, is_correct, PAPER_BOUNDS, self.rng) for text, is_correct in entries]
 
     def handle_paper_click(self, pos: tuple[int, int]) -> None:
-        if self.state != "GAMEPLAY" or self.answered:
+        if self.state != "GAMEPLAY" or self.answered or self.dialogue_phase != "DONE":
             return
         for paper in self.papers:
             if paper.rect().collidepoint(pos):
@@ -461,18 +503,22 @@ class Game:
     def reset_game(self) -> None:
         self.progress.reset()
         self.start_level(1, infinite=False)
+        self.state = "MENU"
 
     # -- update ---------------------------------------------------
 
     def update(self, dt: float) -> None:
         if self.state == "GAMEPLAY" and not self.answered:
-            self.timer -= dt
-            if self.timer <= 0:
-                self.timer = 0
-                self.resolve_answer(False, timeout=True)
+            if self.dialogue_phase != "DONE":
+                self._advance_dialogue(dt)
             else:
-                for paper in self.papers:
-                    paper.update(dt)
+                self.timer -= dt
+                if self.timer <= 0:
+                    self.timer = 0
+                    self.resolve_answer(False, timeout=True)
+                else:
+                    for paper in self.papers:
+                        paper.update(dt)
         elif self.state == "FEEDBACK":
             self.feedback_timer -= dt
             if self.feedback_timer <= 0:
@@ -509,7 +555,7 @@ class Game:
     def layout_buttons(self) -> None:
         self.buttons = []
 
-        if self.show_settings:
+        if self.state == "SETTINGS":
             self._layout_settings_buttons()
             return
         if self.show_dictionary:
@@ -517,10 +563,27 @@ class Game:
             return
 
         if self.state in ("INTRO", "FEEDBACK", "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
-            self.buttons.append(Button(pygame.Rect(1190, 16, 56, 56), "☰", self._open_dictionary))
-            self.buttons.append(Button(pygame.Rect(1122, 16, 56, 56), "⚙", self._open_settings))
+            self.buttons.append(Button(pygame.Rect(1190, 16, 56, 56), "Dict", self._open_dictionary))
+            self.buttons.append(Button(pygame.Rect(1122, 16, 56, 56), "Opts", self._open_settings))
 
-        if self.state == "INTRO":
+        if self.state == "MENU":
+            self.buttons.append(Button(pygame.Rect(540, 290, 200, 44), "How to Play", self._open_how_to_play))
+            self.buttons.append(Button(pygame.Rect(540, 346, 200, 44), "Dictionary", self._open_dictionary))
+            self.buttons.append(Button(pygame.Rect(540, 402, 200, 44), "Settings", self._open_settings))
+            self.buttons.append(Button(pygame.Rect(490, 480, 300, 64), "Start", self._open_level_select))
+        elif self.state == "HOW_TO_PLAY":
+            self.buttons.append(Button(pygame.Rect(36, 24, 110, 48), "Back", self._go_menu))
+        elif self.state == "LEVEL_SELECT":
+            self.buttons.append(Button(pygame.Rect(36, 24, 110, 48), "Back", self._go_menu))
+            level_labels = {1: "LVL 1", 2: "LVL 2", 3: "LVL 3"}
+            for i, level in enumerate((1, 2, 3)):
+                unlocked = self._level_unlocked(level)
+                label = level_labels[level] if unlocked else "LOCKED"
+                action = (lambda lvl=level: self._select_level(lvl)) if unlocked else self._noop
+                self.buttons.append(
+                    Button(LEVEL_CIRCLE_RECTS[i], label, action, enabled=unlocked, radius=110)
+                )
+        elif self.state == "INTRO":
             self.buttons.append(
                 Button(pygame.Rect(540, 560, 200, 60), "Continue", self.on_continue)
             )
@@ -529,9 +592,7 @@ class Game:
                 Button(pygame.Rect(300, 556, 680, 56), "Add To Your Dictionary", self.on_add_to_dictionary)
             )
         elif self.state == "LEVEL_COMPLETE":
-            self.buttons.append(
-                Button(pygame.Rect(360, 560, 260, 60), "Replay (Infinite)", self._replay_infinite)
-            )
+            self.buttons.append(Button(pygame.Rect(360, 560, 260, 60), "Next Level", self._next_level))
             self.buttons.append(Button(pygame.Rect(660, 560, 260, 60), "Home", self._go_home))
         elif self.state == "LEVEL_FAILED":
             self.buttons.append(Button(pygame.Rect(360, 560, 260, 60), "Try Again", self._try_again))
@@ -550,7 +611,7 @@ class Game:
             self.buttons.append(Button(pygame.Rect(1104, 360, 56, 56), ">", self._next_page))
 
     def _layout_settings_buttons(self) -> None:
-        self.buttons.append(Button(pygame.Rect(1150, 60, 48, 48), "X", self._close_settings))
+        self.buttons.append(Button(pygame.Rect(36, 24, 110, 48), "Back", self._close_settings))
         self.buttons.append(
             Button(
                 pygame.Rect(440, 300, 400, 50),
@@ -597,12 +658,13 @@ class Game:
             self.dictionary_page = (self.dictionary_page + 1) % len(entries)
 
     def _open_settings(self) -> None:
-        self.show_settings = True
+        self.pre_settings_state = self.state
         self.show_reset_confirm = False
+        self.state = "SETTINGS"
 
     def _close_settings(self) -> None:
-        self.show_settings = False
         self.show_reset_confirm = False
+        self.state = self.pre_settings_state
 
     def _toggle_music(self) -> None:
         self.audio.set_music_enabled(not self.audio.music_on)
@@ -626,7 +688,38 @@ class Game:
         self.start_level(self.level, infinite=False)
 
     def _go_home(self) -> None:
-        self.start_level(1, infinite=False)
+        self.state = "MENU"
+
+    def _go_menu(self) -> None:
+        self.state = "MENU"
+
+    def _open_how_to_play(self) -> None:
+        self.state = "HOW_TO_PLAY"
+
+    def _open_level_select(self) -> None:
+        self.state = "LEVEL_SELECT"
+
+    def _level_unlocked(self, level: int) -> bool:
+        if level == 1:
+            return True
+        enemy = game_data.LEVELS[level]["enemy"]
+        return any(game_data.CLAIMS.get(enemy, {}).values())
+
+    def _select_level(self, level: int) -> None:
+        if not self._level_unlocked(level):
+            return
+        infinite = level in self.progress.completed_levels
+        self.start_level(level, infinite=infinite)
+
+    def _next_level(self) -> None:
+        next_level = self.level + 1
+        if next_level in game_data.LEVELS and self._level_unlocked(next_level):
+            self.start_level(next_level, infinite=False)
+        else:
+            self.state = "LEVEL_SELECT"
+
+    def _noop(self) -> None:
+        pass
 
     # -- event handling ---------------------------------------------------
 
@@ -635,7 +728,7 @@ class Game:
             if button.enabled and button.rect.collidepoint(pos):
                 button.action()
                 return
-        if not self.show_dictionary and not self.show_settings:
+        if not self.show_dictionary and self.state != "SETTINGS":
             self.handle_paper_click(pos)
 
     # -- drawing ---------------------------------------------------
@@ -643,7 +736,15 @@ class Game:
     def draw(self, surf: pygame.Surface) -> None:
         surf.blit(pygame.transform.smoothscale(self.bg, (VIRTUAL_W, VIRTUAL_H)), (0, 0))
 
-        if self.state == "INTRO":
+        if self.state == "MENU":
+            self._draw_menu(surf)
+        elif self.state == "HOW_TO_PLAY":
+            self._draw_how_to_play(surf)
+        elif self.state == "LEVEL_SELECT":
+            self._draw_level_select(surf)
+        elif self.state == "SETTINGS":
+            self._draw_settings(surf)
+        elif self.state == "INTRO":
             self._draw_intro(surf)
         elif self.state == "TEACHING":
             self._draw_hud(surf)
@@ -664,8 +765,6 @@ class Game:
 
         if self.show_dictionary:
             self._draw_dictionary(surf)
-        elif self.show_settings:
-            self._draw_settings(surf)
 
         for button in self.buttons:
             button.draw(surf, self.fonts["small"] if len(button.label) <= 2 else self.fonts["body"])
@@ -679,6 +778,49 @@ class Game:
         title = f"Food Court -- Level {self.level}" + (" (Infinite)" if self.infinite else "")
         label = self.fonts["large"].render(title, True, (250, 240, 225))
         surf.blit(label, label.get_rect(midtop=(VIRTUAL_W // 2, 16)))
+
+    def _draw_menu(self, surf: pygame.Surface) -> None:
+        panel = pygame.Rect(390, 40, 500, 560)
+        draw_panel(surf, panel, radius=26)
+        logo = pygame.transform.smoothscale(
+            self.logo, (240, int(240 * self.logo.get_height() / self.logo.get_width()))
+        )
+        surf.blit(logo, logo.get_rect(midtop=(panel.centerx, panel.top + 20)))
+
+    def _draw_how_to_play(self, surf: pygame.Surface) -> None:
+        panel = pygame.Rect(240, 90, 800, 540)
+        draw_panel(surf, panel, radius=24)
+        title = self.fonts["title"].render("How to Play", True, TEXT_DARK)
+        surf.blit(title, title.get_rect(center=(panel.centerx, panel.top + 50)))
+
+        lines = [
+            "A fallacy claim appears -- read it, then watch the moving",
+            "answer papers appear below it.",
+            "",
+            "Click the paper naming the fallacy in the claim before the",
+            "ten-second timer runs out.",
+            "",
+            "Correct answers restore a carrot health piece; wrong answers",
+            "and timeouts cost one. Lose all five and the level is failed.",
+            "",
+            "Identify each fallacy correctly three times to master it.",
+            "Master every fallacy in a level to complete it.",
+        ]
+        y = panel.top + 110
+        for line in lines:
+            if line:
+                label = self.fonts["body"].render(line, True, (40, 34, 28))
+                surf.blit(label, (panel.left + 50, y))
+            y += self.fonts["body"].get_height() + 6
+
+    def _draw_level_select(self, surf: pygame.Surface) -> None:
+        title = self.fonts["title"].render("Select a Level", True, (250, 240, 225))
+        surf.blit(title, title.get_rect(midtop=(VIRTUAL_W // 2, 40)))
+
+        for level, rect in zip((1, 2, 3), LEVEL_CIRCLE_RECTS):
+            if level in self.progress.completed_levels and self._level_unlocked(level):
+                hint = self.fonts["small"].render("Replay = Infinite Mode", True, (250, 240, 225))
+                surf.blit(hint, hint.get_rect(midtop=(rect.centerx, rect.bottom + 10)))
 
     def _draw_intro(self, surf: pygame.Surface) -> None:
         self._draw_hud(surf)
@@ -764,7 +906,19 @@ class Game:
             shake_duration=FLASH_DURATION,
         )
 
-        if self.state == "GAMEPLAY":
+        voice_box = pygame.Rect(60, 580, 1160, 110)
+        center_box = pygame.Rect(0, 0, 900, 220)
+        center_box.center = (VIRTUAL_W // 2, 300)
+
+        if self.dialogue_phase == "CENTER":
+            claim_box = center_box
+        elif self.dialogue_phase == "MOVING":
+            t = 1 - (self.dialogue_timer / DIALOGUE_MOVE_SECONDS)
+            claim_box = lerp_rect(center_box, voice_box, t)
+        else:
+            claim_box = voice_box
+
+        if self.state == "GAMEPLAY" and self.dialogue_phase == "DONE":
             bar_w = 300
             pct = 0 if self.timer_max <= 0 else max(0.0, self.timer / self.timer_max)
             bar_rect = pygame.Rect(0, 0, bar_w, 16)
@@ -777,13 +931,12 @@ class Game:
             for paper in self.papers:
                 paper.draw(surf, self.fonts["paper"])
 
-        voice_box = pygame.Rect(60, 580, 1160, 110)
-        draw_panel(surf, voice_box, radius=16)
+        draw_panel(surf, claim_box, radius=16)
         speaker = self.fonts["body"].render(f"{self.enemy_name}:", True, PANEL_BORDER)
-        surf.blit(speaker, (voice_box.left + 24, voice_box.top + 12))
-        for i, line in enumerate(wrap_text(self.current_claim, self.fonts["body"], voice_box.width - 48)[:3]):
+        surf.blit(speaker, (claim_box.left + 24, claim_box.top + 12))
+        for i, line in enumerate(wrap_text(self.current_claim, self.fonts["body"], claim_box.width - 48)[:4]):
             label = self.fonts["body"].render(line, True, TEXT_DARK)
-            surf.blit(label, (voice_box.left + 24, voice_box.top + 44 + i * 26))
+            surf.blit(label, (claim_box.left + 24, claim_box.top + 44 + i * 26))
 
         if self.state == "FEEDBACK":
             self._draw_feedback_banner(surf)
@@ -828,16 +981,22 @@ class Game:
 
     def _draw_result_card(self, surf: pygame.Surface, title: str, color: tuple) -> None:
         self._draw_hud(surf)
-        card = pygame.Rect(340, 220, 600, 300)
-        draw_panel(surf, card, radius=22)
-        label = self.fonts["title"].render(title, True, color)
-        surf.blit(label, label.get_rect(center=(card.centerx, card.top + 80)))
+        card = pygame.Rect(340, 160, 600, 380)
+        pygame.draw.rect(surf, CARD_WHITE, card, border_radius=26)
+        label = self.fonts["title_bold"].render(title, True, color)
+        surf.blit(label, label.get_rect(center=(card.centerx, card.top + 50)))
+
+        tomato_idx = 0 if title == "LEVEL COMPLETE" else len(self.tomato_frames) - 1
+        tomato_img = self.tomato_frames[tomato_idx]
+        tomato_small = pygame.transform.smoothscale(tomato_img, (140, 140))
+        surf.blit(tomato_small, tomato_small.get_rect(center=(card.centerx, card.top + 160)))
+
         if title == "LEVEL COMPLETE":
             sub = f"All {len(self.fallacy_ids)} fallacies mastered!"
         else:
             sub = "Health depleted -- give it another go."
-        sub_label = self.fonts["body"].render(sub, True, TEXT_DARK)
-        surf.blit(sub_label, sub_label.get_rect(center=(card.centerx, card.top + 150)))
+        sub_label = self.fonts["body"].render(sub, True, (40, 34, 28))
+        surf.blit(sub_label, sub_label.get_rect(center=(card.centerx, card.top + 260)))
 
     def _draw_infinite_results(self, surf: pygame.Surface) -> None:
         self._draw_hud(surf)

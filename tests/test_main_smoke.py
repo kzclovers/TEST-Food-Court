@@ -50,7 +50,11 @@ class GameSmokeTests(unittest.TestCase):
         while self.game.state != target_state and steps < max_steps:
             steps += 1
             state = self.game.state
-            if state == "INTRO":
+            if state == "MENU":
+                self.game._open_level_select()
+            elif state == "LEVEL_SELECT":
+                self.game._select_level(1)
+            elif state == "INTRO":
                 self.game.on_continue()
             elif state == "TEACHING":
                 self.game.on_add_to_dictionary()
@@ -102,12 +106,67 @@ class GameSmokeTests(unittest.TestCase):
         self.game.draw(self.canvas)
         self.game._confirm_reset()
         self.assertEqual(self.game.progress.dictionary_ids, set())
-        self.assertEqual(self.game.state, "INTRO")
+        self.assertEqual(self.game.state, "MENU")
 
     def test_window_to_virtual_maps_center_to_center(self):
         vx, vy = self.main.window_to_virtual((640, 360), (1280, 720))
         self.assertAlmostEqual(vx, 640)
         self.assertAlmostEqual(vy, 360)
+
+    def test_game_starts_at_the_main_menu(self):
+        self.assertEqual(self.game.state, "MENU")
+
+    def test_level_select_keeps_unauthored_levels_locked(self):
+        self.game._open_level_select()
+        self.assertEqual(self.game.state, "LEVEL_SELECT")
+        self.game._select_level(2)
+        self.assertEqual(self.game.state, "LEVEL_SELECT")
+        self.game._select_level(3)
+        self.assertEqual(self.game.state, "LEVEL_SELECT")
+
+    def test_menu_navigation_round_trip(self):
+        self.game._open_how_to_play()
+        self.assertEqual(self.game.state, "HOW_TO_PLAY")
+        self.game.draw(self.canvas)
+        self.game._go_menu()
+        self.assertEqual(self.game.state, "MENU")
+
+        self.game._open_settings()
+        self.assertEqual(self.game.state, "SETTINGS")
+        self.game.draw(self.canvas)
+        self.game._close_settings()
+        self.assertEqual(self.game.state, "MENU")
+
+    def test_dialogue_centers_then_moves_before_papers_appear(self):
+        self.game._open_level_select()
+        self.game._select_level(1)
+        self.game.on_continue()
+        self.game.on_add_to_dictionary()
+
+        self.assertEqual(self.game.state, "GAMEPLAY")
+        self.assertEqual(self.game.dialogue_phase, "CENTER")
+        self.assertEqual(self.game.papers, [])
+        self.game.draw(self.canvas)
+
+        self.game.update(self.main.DIALOGUE_CENTER_SECONDS + 0.01)
+        self.assertEqual(self.game.dialogue_phase, "MOVING")
+        self.assertEqual(self.game.papers, [])
+
+        self.game.update(self.main.DIALOGUE_MOVE_SECONDS + 0.01)
+        self.assertEqual(self.game.dialogue_phase, "DONE")
+        self.assertGreater(len(self.game.papers), 0)
+        self.assertAlmostEqual(self.game.timer, self.game.timer_max)
+
+    def test_clicking_during_dialogue_phase_is_ignored(self):
+        self.game._open_level_select()
+        self.game._select_level(1)
+        self.game.on_continue()
+        self.game.on_add_to_dictionary()
+        self.assertEqual(self.game.dialogue_phase, "CENTER")
+
+        self.game.handle_click((640, 300))
+        self.assertEqual(self.game.state, "GAMEPLAY")
+        self.assertFalse(self.game.answered)
 
 
 def game_rules_hold():

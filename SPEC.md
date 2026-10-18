@@ -217,7 +217,7 @@ The supplied reference screens establish the visual language for the game:
 - The dictionary is designed as a book with previous-page and next-page controls.
 - Pages show collected fallacy names, definitions, and the two example claims shown when the fallacy was first introduced.
 - Dictionary progress persists when the player closes and reopens the browser.
-- Settings will eventually include a reset-game action that clears the persisted dictionary and progression. The username/profile control is intentionally omitted for now.
+- Settings includes a confirmed reset-game action that clears the persisted dictionary and progression. The username/profile control is intentionally omitted for now.
 
 ### Answer papers
 
@@ -341,11 +341,18 @@ Each enemy has a unique claim set, even when testing the same fallacy. Claims sh
 - Fallacy mastery, carrot health, ten-second questions, feedback bars, timeout handling, enemy emotion variants, and the chef’s end-of-level gavel animation are included.
 - The prototype saves dictionary progress, mastery counts, Level 1 completion, and best infinite-mode survival time locally.
 
-## Next iteration
+## Main menu, level select, and settings screens
 
-The next milestone after the Level 1 prototype adds the home screen/menu and the level-select page described in [Opening flow](#opening-flow) and [Visual direction](#visual-direction):
+- The app boots directly to the main menu, which has How to Play, Dictionary, and Settings links plus a Start button; Start goes to the level-select screen.
+- The level-select screen shows a circle per level. Level 1 is always open. Levels 2 and 3 stay locked (no claim content has been written for Knife or Boiling Pot yet) until their claim banks exist, at which point they unlock automatically rather than through a separate flag.
+- Selecting an already-completed level from level-select starts it in infinite mode rather than normal progression, per [Replay and infinite mode](#replay-and-infinite-mode).
+- Settings is reached from the main menu or from the in-level gear icon, and returns to wherever it was opened from. It is intentionally minimal: Music and Sound Effects on/off toggles and a confirmed Reset Game Progress action. No username field and no screen-brightness control are included.
+- How to Play is a static instructions screen reachable from the main menu.
+- Icons (home, back/return, next-level, lock) are short text labels for now (e.g. "Back", "LOCKED") rather than custom glyph art, pending real icon assets.
+- Not yet implemented: the one-second full-page logo opening screen that morphs into the main menu described in [Opening flow](#opening-flow) -- the app currently opens straight to the menu screen itself.
 
-- The full-page logo opening screen that morphs/transitions into the main menu.
-- The main menu itself, with Start, How to Play, Dictionary, and Settings options.
-- A level-select screen showing all three enemy portraits, with later levels locked until prior levels are completed.
-- Wiring the existing Level 1 prototype, and the menu/level-select screens, into a single navigable flow (menu -> level select -> gameplay -> back to menu).
+### Dialogue timing
+
+- When a question begins, the claim appears centered on screen (not yet in the voice box) for three seconds.
+- It then animates sliding down into the voice box at the bottom of the screen.
+- Only once it settles into the voice box do the answer papers appear and the question's countdown timer start -- the three-second centered read and the slide are "free" time that doesn't consume the answer timer.
