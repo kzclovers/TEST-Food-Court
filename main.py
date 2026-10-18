@@ -23,6 +23,7 @@ from audio import AudioManager
 from game_data import FALLACIES, FALLACIES_BY_ID
 from game_rules import FallacySelector
 from entities.chef import Chef
+from entities.peeler import Peeler
 from entities.tomato import Tomato
 from progress import Progress
 
@@ -51,11 +52,11 @@ FEEDBACK_ENTER_SECONDS = 0.3
 FEEDBACK_EXIT_SECONDS = 0.3
 
 PAPER_BOUNDS = pygame.Rect(230, 320, 820, 230)
-CHEF_ANCHOR = (640, 300)
+CHEF_ANCHOR = (640, 500)
 TOMATO_ANCHOR = (190, 560)
 ENEMY_ANCHOR = (1090, 560)
 CHARACTER_SIZE = 230
-CHEF_SIZE = 190
+CHEF_SIZE = 400
 
 # Connected-component bounding boxes (x, y, w, h) of the five individual
 # carrot illustrations in carrot_heath_bar.png, widest/fullest first.
@@ -256,21 +257,20 @@ class Game:
 
         health_sheet = load_image("carrot_heath_bar.png", (2160, 1620), (214, 122, 54))
         self.health_frames: list[pygame.Surface] = []
-        target_h = 34
+        target_h = 60
         for x, y, w, h in HEALTH_ICON_RECTS:
             rect = pygame.Rect(x, y, w, h).clip(health_sheet.get_rect())
             piece = health_sheet.subsurface(rect).copy()
             target_w = max(1, round(piece.get_width() * target_h / piece.get_height()))
             self.health_frames.append(pygame.transform.smoothscale(piece, (target_w, target_h)))
 
-        peeler_sheet = load_image("Peeler_SpriteSheet.png", (1024, 1024), (200, 140, 90))
-        self.peeler_frames = slice_sheet(peeler_sheet, 5)
+        self.peeler = Peeler(ASSET_DIR / "Peeler_SpriteSheet.png")
+        self.peeler_frames = self.peeler.frames
         self.tomato = Tomato(ASSET_DIR / "Tomato_SpriteSheet.png")
         self.chef = Chef(path=ASSET_DIR / "Chef_SpriteSheet.png")
         self.tomato_frames = self.tomato.frames
         self.chef_frames = self.chef.frames
 
-        self.peeler_frames = [scale_square(f, CHARACTER_SIZE) for f in self.peeler_frames]
         self.tomato_frames = [scale_square(f, CHARACTER_SIZE) for f in self.tomato_frames]
         self.chef_frames = [
             pygame.transform.smoothscale(
@@ -491,10 +491,12 @@ class Game:
     # -- frame emotion mapping ---------------------------------------------------
 
     def _enemy_frame(self) -> pygame.Surface:
+        return self.peeler_frames[self._enemy_frame_index()]
+
+    def _enemy_frame_index(self) -> int:
         if self.enemy_flash > 0:
-            return self.peeler_frames[min(4, len(self.peeler_frames) - 1)]
-        idx = min(3, self.enemy_losses // 3)
-        return self.peeler_frames[min(idx, len(self.peeler_frames) - 1)]
+            return min(4, len(self.peeler_frames) - 1)
+        return min(3, self.enemy_losses // 3, len(self.peeler_frames) - 1)
 
     def _tomato_frame(self) -> pygame.Surface:
         if self.tomato_flash > 0:
@@ -669,16 +671,10 @@ class Game:
             button.draw(surf, self.fonts["small"] if len(button.label) <= 2 else self.fonts["body"])
 
     def _draw_hud(self, surf: pygame.Surface) -> None:
-        x = 30
-        slot_w = 98
-        for i, frame in enumerate(self.health_frames):
-            if i >= self.health:
-                faded = frame.copy()
-                faded.set_alpha(70)
-                surf.blit(faded, (x, 26))
-            else:
-                surf.blit(frame, (x, 26))
-            x += slot_w
+        health_frame = self.health_frames[
+            min(len(self.health_frames) - 1, game_rules.HEALTH_MAX - self.health)
+        ]
+        surf.blit(health_frame, (30, 18))
 
         title = f"Food Court -- Level {self.level}" + (" (Infinite)" if self.infinite else "")
         label = self.fonts["large"].render(title, True, (250, 240, 225))
@@ -759,8 +755,14 @@ class Game:
             shake_duration=FLASH_DURATION,
         )
 
-        enemy = pygame.transform.flip(self._enemy_frame(), True, False)
-        surf.blit(enemy, enemy.get_rect(midbottom=ENEMY_ANCHOR))
+        self.peeler.draw(
+            surf, self._enemy_frame_index(), ENEMY_ANCHOR,
+            CHARACTER_SIZE,
+            flip_x=True,
+            damaged=self.enemy_flash > 0,
+            shake_time=FLASH_DURATION - self.enemy_flash,
+            shake_duration=FLASH_DURATION,
+        )
 
         if self.state == "GAMEPLAY":
             bar_w = 300
@@ -808,7 +810,7 @@ class Game:
 
         bar_h = 120
         banner = pygame.Rect(int(x_offset), 0, VIRTUAL_W, bar_h)
-        banner.centery = 330
+        banner.centery = 220
         pygame.draw.rect(surf, color, banner)
         pygame.draw.rect(surf, (255, 255, 255), banner, width=4)
         label = self.fonts["title_bold"].render(self.result_label, True, (255, 255, 255))
@@ -958,6 +960,7 @@ async def main() -> None:
     game.layout_buttons()
 
     running = True
+    mouse_press_handled = False
     while running:
         dt = clock.tick(60) / 1000.0
         window_size = screen.get_size()
@@ -972,6 +975,15 @@ async def main() -> None:
                 vpos = window_to_virtual(event.pos, screen.get_size())
                 game.handle_click(vpos)
                 game.layout_buttons()
+                mouse_press_handled = True
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                # Some window managers consume the first press while focusing
+                # the game window. Handle the release if no press reached us.
+                if not mouse_press_handled and not portrait:
+                    vpos = window_to_virtual(event.pos, screen.get_size())
+                    game.handle_click(vpos)
+                    game.layout_buttons()
+                mouse_press_handled = False
 
         if not portrait:
             game.update(dt)
