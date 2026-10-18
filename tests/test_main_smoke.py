@@ -61,7 +61,10 @@ class GameSmokeTests(unittest.TestCase):
             elif state == "GAMEPLAY":
                 self.game.resolve_answer(answer_correct, timeout=False)
             elif state == "FEEDBACK":
-                self.game.update(game_rules_hold())
+                if self.game.review_fallacy_id is not None:
+                    self.game.handle_click((640, 400))
+                else:
+                    self.game.update(game_rules_hold())
             elif state == "GAVEL":
                 self.game.update(2.0)
             self.game.layout_buttons()
@@ -156,6 +159,94 @@ class GameSmokeTests(unittest.TestCase):
         self.assertEqual(self.game.dialogue_phase, "DONE")
         self.assertGreater(len(self.game.papers), 0)
         self.assertAlmostEqual(self.game.timer, self.game.timer_max)
+
+    def test_wrong_answer_pops_the_correct_flashcard(self):
+        self.game._open_level_select()
+        self.game._select_level(1)
+        self.game.on_continue()
+        self.game.on_add_to_dictionary()
+        self.game.update(self.main.DIALOGUE_CENTER_SECONDS + 0.01)
+        self.game.update(self.main.DIALOGUE_MOVE_SECONDS + 0.01)
+        fid = self.game.current_fallacy_id
+        before = set(self.game.progress.dictionary_ids)
+        self.game.resolve_answer(False, timeout=False)
+        self.assertEqual(self.game.review_fallacy_id, fid)
+        self.assertEqual(self.game.progress.dictionary_ids, before)
+        self.game.draw(self.canvas)
+        self.game.layout_buttons()
+        self.game.handle_click((640, 400))
+        self.game.update(5)
+        self.assertEqual(self.game.state, "FEEDBACK")
+        self.assertEqual(self.game.review_fallacy_id, fid)
+        self.assertEqual(self.game.progress.dictionary_ids, before)
+        self.game.layout_buttons()
+        self.game.handle_click((640, 400))
+        self.assertIsNone(self.game.review_fallacy_id)
+        self.assertEqual(self.game.progress.dictionary_ids, before)
+
+    def test_dictionary_starts_empty_and_a_card_is_offered_every_two_rounds(self):
+        self.assertEqual(self.game.progress.dictionary_ids, set())
+        self.game._open_level_select()
+        self.game._select_level(1)
+        self.game.on_continue()
+        self.assertEqual(self.game.state, "GAMEPLAY")
+        self.assertEqual(self.game.progress.dictionary_ids, set())
+
+        played = self.game.current_fallacy_id
+        self.game.resolve_answer(True, timeout=False)
+        self.game.update(game_rules_hold())
+        self.assertEqual(self.game.state, "GAMEPLAY")
+        self.assertEqual(self.game.current_fallacy_id, played)
+
+        self.game.resolve_answer(True, timeout=False)
+        self.game.update(game_rules_hold())
+        self.assertEqual(self.game.state, "TEACHING")
+        self.assertEqual(self.game.teaching_fallacy_id, played)
+        self.assertEqual(self.game.progress.dictionary_ids, set())
+
+        self.game.on_add_to_dictionary()
+        self.assertEqual(self.game.progress.dictionary_ids, {played})
+        self.assertEqual(self.game.state, "GAMEPLAY")
+
+    def test_leftover_dictionary_cards_sit_on_both_pages(self):
+        self.game.progress.dictionary_ids.update({1, 2, 3, 4, 5, 6})
+        self.game._open_dictionary()
+        self.assertEqual(self.game._spread_count(), 2)
+        self.assertEqual(self.game._spread_ids(0), (1, 3, 2, 4))
+        self.assertEqual(self.game._spread_ids(1), (3, 5, 4, 6))
+        self.game.dictionary_page = 1
+        self.game.layout_buttons()
+        self.game.draw(self.canvas)
+
+    def test_clicking_a_dictionary_card_enlarges_it(self):
+        self.game.progress.dictionary_ids.update({1, 2})
+        self.game._open_dictionary()
+        self.game.layout_buttons()
+        self.game._open_card(1)
+        self.assertEqual(self.game.zoomed_card, 1)
+        self.game.update(0.2)
+        self.game.layout_buttons()
+        self.game.draw(self.canvas)
+        self.game._close_zoom()
+        self.assertIsNone(self.game.zoomed_card)
+        self.game.draw(self.canvas)
+
+    def test_dictionary_page_turn_advances_a_spread(self):
+        self.game.progress.dictionary_ids.update({1, 2, 3, 4, 5})
+        self.game._open_dictionary()
+        self.game.layout_buttons()
+        self.game.draw(self.canvas)
+        self.game._next_page()
+        self.assertEqual(self.game.dictionary_page, 0)
+        self.assertIsNotNone(self.game.page_anim)
+        self.game.draw(self.canvas)
+        self.game.update(self.main.PAGE_TURN_SECONDS * 0.5)
+        self.game.draw(self.canvas)
+        self.game.update(self.main.PAGE_TURN_SECONDS)
+        self.assertIsNone(self.game.page_anim)
+        self.assertEqual(self.game.dictionary_page, 1)
+        self.game.layout_buttons()
+        self.game.draw(self.canvas)
 
     def test_clicking_during_dialogue_phase_is_ignored(self):
         self.game._open_level_select()

@@ -1,11 +1,10 @@
 """Static game content: fallacy definitions and enemy claim banks.
 
 Fallacy ids are 1-18 and match the introduction order in SPEC.md. The
-numbered `DictionaryCard` assets in `assets/` use a different internal
-order, so they are not used as the teaching source here -- the prototype
-draws its own teaching cards from this module instead. A fallacy's two
-dictionary/teaching-card examples are the first two claims in its
-enemy's claim bank below (see `claims_for`), not a separate field here.
+numbered card files run in the opposite order (#18 and DictionaryCard18
+are fallacy 1). Book pages use the curved DictionaryCard images. Clicking
+one enlarges `Dictionary Card/#`, and a wrong answer pops that same card
+without collecting it. Every two rounds, `Add cards/#` is the lesson.
 """
 
 from __future__ import annotations
