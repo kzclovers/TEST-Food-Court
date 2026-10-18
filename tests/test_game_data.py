@@ -21,10 +21,15 @@ class FallacyDataTests(unittest.TestCase):
 
 
 class LevelDataTests(unittest.TestCase):
-    def test_three_levels_with_six_fallacies_each(self):
-        self.assertEqual(set(LEVELS.keys()), {1, 2, 3})
+    def test_six_levels_with_three_fallacies_each(self):
+        self.assertEqual(set(LEVELS.keys()), {1, 2, 3, 4, 5, 6})
         for level, info in LEVELS.items():
-            self.assertEqual(len(info["fallacy_ids"]), 6)
+            self.assertEqual(len(info["fallacy_ids"]), 3)
+
+    def test_each_enemy_hosts_two_consecutive_levels(self):
+        self.assertEqual([LEVELS[lvl]["enemy"] for lvl in range(1, 7)], [
+            "Vegetable Peeler", "Vegetable Peeler", "Knife", "Knife", "Boiling Pot", "Boiling Pot",
+        ])
 
     def test_levels_cover_all_eighteen_fallacies_without_overlap(self):
         seen: set[int] = set()
@@ -35,16 +40,18 @@ class LevelDataTests(unittest.TestCase):
         self.assertEqual(seen, {f.id for f in FALLACIES})
 
     def test_level_order_matches_spec_progression(self):
-        self.assertEqual(LEVELS[1]["fallacy_ids"], list(range(1, 7)))
-        self.assertEqual(LEVELS[2]["fallacy_ids"], list(range(7, 13)))
-        self.assertEqual(LEVELS[3]["fallacy_ids"], list(range(13, 19)))
+        for level in range(1, 7):
+            self.assertEqual(LEVELS[level]["fallacy_ids"], list(range(level * 3 - 2, level * 3 + 1)))
 
 
 class ClaimBankTests(unittest.TestCase):
-    def test_level_one_enemy_has_claims_for_every_level_one_fallacy(self):
-        for fallacy_id in LEVELS[1]["fallacy_ids"]:
-            claims = claims_for("Vegetable Peeler", fallacy_id)
-            self.assertGreaterEqual(len(claims), 1)
+    def test_every_enemy_has_claims_for_everything_unlocked_by_its_levels(self):
+        """Official rounds quiz all unlocked fallacies, so each enemy needs
+        claims for its own fallacies and every earlier one."""
+        for level, info in LEVELS.items():
+            for fallacy_id in range(1, max(info["fallacy_ids"]) + 1):
+                claims = claims_for(info["enemy"], fallacy_id)
+                self.assertGreaterEqual(len(claims), 2, (info["enemy"], fallacy_id))
 
     def test_claims_for_unknown_enemy_returns_empty_list(self):
         self.assertEqual(claims_for("Spoon", 1), [])

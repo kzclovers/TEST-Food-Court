@@ -1,11 +1,9 @@
-"""Food Court -- Level 1 prototype.
+"""Food Court.
 
 Run on desktop with `python main.py`. Packaged for the browser with
-Pygbag (see README.md). This milestone implements the Level 1 encounter
-against the Vegetable Peeler end to end: gradual fallacy teaching,
-mastery-weighted quizzing on moving answer papers, health/timer/feedback,
-the dictionary, level complete/failed, and infinite-mode replay. The full
-main menu and later enemies are future milestones (see SPEC.md).
+Pygbag (see README.md). Six levels (two per enemy) each teach three
+fallacies, run a no-damage warm-up, then an official round where both
+sides lose health. Infinite mode reviews everything unlocked so far.
 """
 
 from __future__ import annotations
@@ -22,7 +20,6 @@ import game_rules
 from audio import AudioManager
 from game_data import FALLACIES, FALLACIES_BY_ID
 from game_rules import FallacySelector
-from entities.character import SpriteStrip
 from entities.chef import Chef
 from entities.peeler import Peeler
 from entities.tomato import Tomato
@@ -48,11 +45,21 @@ OVERLAY_DARK = (16, 10, 8)
 
 FLASH_DURATION = 0.5
 GAVEL_DURATION = 1.2
-TOAST_DURATION = 3.0
+TOAST_DURATION = 2.0
 FEEDBACK_ENTER_SECONDS = 0.3
 FEEDBACK_EXIT_SECONDS = 0.3
-DIALOGUE_CENTER_SECONDS = 3.0
-DIALOGUE_MOVE_SECONDS = 0.4
+DIALOGUE_CENTER_SECONDS = 0.1
+DIALOGUE_MOVE_SECONDS = 1.0
+PAGE_TURN_SECONDS = 0.65
+CARDS_PER_SPREAD = 4  # two dictionary cards on each page of the open book
+
+# Open-book art (`Untitled_Artwork 9.png`) is a square canvas. These rects
+# are in that image's pixel space: the crop is the opaque book, and the
+# page rects sit on the cream of each page, below the binder rings.
+BOOK_CROP = pygame.Rect(162, 294, 1724, 1366)
+LEFT_PAGE_SRC = pygame.Rect(250, 660, 700, 900)
+RIGHT_PAGE_SRC = pygame.Rect(1102, 660, 688, 900)
+BOOK_MAX = (1080, 690)
 
 PAPER_BOUNDS = pygame.Rect(230, 320, 820, 230)
 CHEF_ANCHOR = (640, 500)
@@ -61,23 +68,34 @@ ENEMY_ANCHOR = (1090, 560)
 CHARACTER_SIZE = 230
 CHEF_SIZE = 400
 
-LEVEL_CIRCLE_RECTS = [
-    pygame.Rect(230, 240, 210, 210),
-    pygame.Rect(535, 240, 210, 210),
-    pygame.Rect(840, 240, 210, 210),
-]
+LEVEL_CIRCLE_RECTS = [pygame.Rect(70 + i * 196, 300, 160, 160) for i in range(6)]
+INFINITE_BUTTON_RECT = pygame.Rect(470, 130, 340, 72)
 RETURN_BUTTON_RECT = pygame.Rect(40, 28, 64, 64)
+PAUSE_BUTTON_RECT = pygame.Rect(22, 16, 56, 56)
+PAUSE_POPUP_RECT = pygame.Rect(440, 200, 400, 300)
+INFINITE_SAVE_KEY = 0  # infinite mode is one shared run, not per level
+ENEMY_SHEETS = {
+    "Vegetable Peeler": "Peeler_SpriteSheet.png",
+    "Knife": "Knife_SpriteSheet.png",
+    "Boiling Pot": "Pot_SpriteSheet.png",
+}
 SETTINGS_PAPER_RECT = pygame.Rect(450, 50, 380, 600)
 SETTINGS_ROW_RECTS = [pygame.Rect(500, 330, 280, 50), pygame.Rect(500, 410, 280, 50)]
+# Slider track per settings row: the label sits above, the track below it.
+SETTINGS_SLIDER_RECTS = [pygame.Rect(r.left + 10, r.bottom - 12, r.width - 20, 8) for r in SETTINGS_ROW_RECTS]
+# Music track per level; infinite mode uses its own theme.
+LEVEL_MUSIC = {1: "veggie_skinner", 2: "veggie_skinner", 3: "knife", 4: "knife", 5: "boiling_pot", 6: "boiling_pot"}
+LEVEL_MUSIC_STATES = ("TEACHING", "GAMEPLAY", "FEEDBACK", "GAVEL")
 
-# Connected-component bounding boxes (x, y, w, h) of the five individual
-# carrot illustrations in carrot_heath_bar.png, widest/fullest first.
+# Sprite bounds in HealthBar_SpriteSheet.png, ordered left to right from the
+# full carrot to the most depleted stub.
 HEALTH_ICON_RECTS = [
-    (193, 1145, 1044, 393),
-    (248, 638, 957, 393),
-    (427, 135, 851, 393),
-    (1424, 285, 704, 393),
-    (1594, 776, 544, 393),
+    (133, 282, 2068, 442),
+    (2552, 295, 1821, 442),
+    (4686, 291, 1668, 442),
+    (6661, 293, 1483, 442),
+    (8563, 287, 1227, 442),
+    (10202, 290, 949, 443),
 ]
 
 
@@ -128,6 +146,19 @@ def draw_panel(surf: pygame.Surface, rect: pygame.Rect, radius: int = 18) -> Non
     pygame.draw.rect(surf, PANEL_BORDER, rect, width=3, border_radius=radius)
 
 
+def smoothstep(t: float) -> float:
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
+
+
+def book_display_size() -> tuple[int, int]:
+    scale = min(BOOK_MAX[0] / BOOK_CROP.width, BOOK_MAX[1] / BOOK_CROP.height)
+    return (
+        max(1, int(BOOK_CROP.width * scale)),
+        max(1, int(BOOK_CROP.height * scale)),
+    )
+
+
 def lerp_rect(a: pygame.Rect, b: pygame.Rect, t: float) -> pygame.Rect:
     t = max(0.0, min(1.0, t))
     return pygame.Rect(
@@ -175,6 +206,11 @@ def draw_icon(surf: pygame.Surface, name: str, center: tuple[int, int], size: in
         pygame.draw.arc(surf, color, shackle, 0, math.pi, w)
         pygame.draw.line(surf, color, (shackle.left + w // 2, shackle.centery), (shackle.left + w // 2, body.top), w)
         pygame.draw.line(surf, color, (shackle.right - w // 2 - 1, shackle.centery), (shackle.right - w // 2 - 1, body.top), w)
+    elif name == "pause":
+        bar = pygame.Rect(0, 0, max(4, round(s * 0.18)), round(s * 0.62))
+        for dx in (-s * 0.17, s * 0.17):
+            bar.center = (round(cx + dx), cy)
+            pygame.draw.rect(surf, color, bar, border_radius=2)
     elif name == "check":
         pygame.draw.lines(surf, color, False, [(cx - s * 0.4, cy), (cx - s * 0.1, cy + s * 0.3), (cx + s * 0.45, cy - s * 0.35)], w + 2)
     elif name == "gear":
@@ -193,7 +229,7 @@ def draw_icon(surf: pygame.Surface, name: str, center: tuple[int, int], size: in
         pygame.draw.rect(surf, color, right, w, border_radius=2)
 
 
-def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(60, 34, 20), width=3) -> None:
+def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(60, 34, 20), width=1) -> None:
     base = font.render(text, True, outline)
     rect = base.get_rect(center=center)
     for dx in range(-width, width + 1):
@@ -204,7 +240,7 @@ def draw_outlined_text(surf, font, text, center, fill=(255, 255, 255), outline=(
 
 
 def draw_paper(surf: pygame.Surface, rect: pygame.Rect, tilt: float = -2.5) -> None:
-    """A slightly tilted cream sheet of paper with a soft shadow, as in the mockups."""
+    
     sheet = pygame.Surface(rect.size, pygame.SRCALPHA)
     pygame.draw.rect(sheet, PAPER_FILL, sheet.get_rect(), border_radius=6)
     inner = sheet.get_rect().inflate(-24, -24)
@@ -291,10 +327,22 @@ class Button:
 
 
 class Paper:
-    def __init__(self, text: str, is_correct: bool, bounds: pygame.Rect, rng: random.Random):
+    def __init__(
+        self,
+        text: str,
+        is_correct: bool,
+        bounds: pygame.Rect,
+        rng: random.Random,
+        backgrounds: list[pygame.Surface] | None = None,
+    ):
         self.text = text
         self.is_correct = is_correct
         self.w, self.h = 196, 64
+        background = rng.choice(backgrounds) if backgrounds else None
+        self.background = (
+            pygame.transform.smoothscale(background, (self.w, self.h))
+            if background is not None else None
+        )
         self.x = rng.uniform(bounds.left, max(bounds.left, bounds.right - self.w))
         self.y = rng.uniform(bounds.top, max(bounds.top, bounds.bottom - self.h))
         angle = rng.uniform(0, 2 * math.pi)
@@ -324,54 +372,78 @@ class Paper:
 
     def draw(self, surf: pygame.Surface, font: pygame.font.Font) -> None:
         r = self.rect()
-        pygame.draw.rect(surf, PAPER_FILL, r, border_radius=10)
-        pygame.draw.rect(surf, PAPER_BORDER, r, width=2, border_radius=10)
+        if self.background is not None:
+            surf.blit(self.background, r)
+        else:
+            pygame.draw.rect(surf, PAPER_FILL, r, border_radius=10)
+            pygame.draw.rect(surf, PAPER_BORDER, r, width=2, border_radius=10)
         lines = wrap_text(self.text, font, r.width - 14)[:3]
         total_h = len(lines) * (font.get_height() - 2)
         y = r.centery - total_h // 2
         for line in lines:
-            label = font.render(line, True, TEXT_DARK)
-            surf.blit(label, label.get_rect(center=(r.centerx, y + font.get_height() // 2 - 1)))
+            draw_outlined_text(
+                surf,
+                font,
+                line,
+                (r.centerx, y + font.get_height() // 2 - 1),
+                fill=TEXT_DARK,
+                outline=PAPER_FILL,
+                width=1,
+            )
             y += font.get_height() - 2
-
 
 class Game:
     def __init__(self) -> None:
         self.rng = random.Random()
-        self.audio = AudioManager()
         self.progress = Progress()
+        self.audio = AudioManager(self.progress.music_volume, self.progress.sfx_volume)
+        self.dragging_slider: int | None = None
         self.selector = FallacySelector()
 
+        # Keep the selected font files inside the project so desktop and browser
+        # builds use the same Nunito faces.
+        font_dir = ASSET_DIR / "Nunito" / "static"
         self.fonts = {
-            "title": pygame.font.Font(None, 54),
-            "large": pygame.font.Font(None, 40),
-            "body": pygame.font.Font(None, 28),
-            "small": pygame.font.Font(None, 22),
-            "paper": pygame.font.Font(None, 20),
+            "title": pygame.font.Font(str(font_dir / "Nunito-Bold.ttf"), 54),
+            "large": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 40),
+            "body": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 28),
+            "small": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 22),
+            "paper": pygame.font.Font(str(font_dir / "Nunito-Regular.ttf"), 18),
         }
-        self.fonts["title_bold"] = pygame.font.Font(None, 54)
-        self.fonts["title_bold"].set_bold(True)
-        self.fonts["body_bold"] = pygame.font.Font(None, 28)
-        self.fonts["body_bold"].set_bold(True)
+        self.fonts["title_bold"] = pygame.font.Font(str(font_dir / "Nunito-ExtraBold.ttf"), 54)
+        self.fonts["body_bold"] = pygame.font.Font(str(font_dir / "Nunito-Bold.ttf"), 28)
+        self.banner_cache: dict[tuple[str, tuple[int, int, int]], pygame.Surface] = {}
+        self.banner_font = pygame.font.Font(str(font_dir / "Nunito-ExtraBold.ttf"), 84)
 
         self._load_assets()
 
         self.buttons: list[Button] = []
         self.show_dictionary = False
-        self.dictionary_page = 0
+        self.dictionary_page = 0  # spread index; four cards, two on each page
+        self.page_anim = None
+        self.zoomed_card: int | None = None
+        self.zoom_t = 1.0
+        self._card_cache: dict = {}
+        self.review_fallacy_id: int | None = None
+        self.review_clicks = 0
+        self.review_age = 0.0
         self.show_reset_confirm = False
         self.pre_settings_state = "MENU"
 
-        self.state = "INTRO"
+        self.state = "MENU"
         self.level = 1
         self.infinite = False
         self.health = game_rules.HEALTH_MAX
+        self.enemy_health = game_rules.OPPONENT_HEALTH_MAX
         self.fallacy_ids: list[int] = []
         self.enemy_name = ""
-        self.introduced_ids: list[int] = []
-        self.pending_intro_queue: list[int] = []
-        self.teaching_fallacy_id: int | None = None
-        self.questions_since_intro = 0
+        self.phase = "WARMUP"  # main levels: "WARMUP" then "ROUND"
+        self.teaching_ids: list[int] = []
+        self.teaching_added: set[int] = set()
+        self.warmup_queue: list[int] = []
+        self.paused = False
+        self.fail_reason = ""
+        self.infinite_correct = 0
         self.question_index = 0
         self.current_fallacy_id: int | None = None
         self.current_claim = ""
@@ -388,15 +460,12 @@ class Game:
         self.tomato_flash = 0.0
         self.toasts: list[list] = []
         self.gavel_timer = 0.0
-        self.gavel_target = "INTRO"
+        self.gavel_target = "MENU"
         self.infinite_start_ms = 0
         self.infinite_survived = 0.0
         self.infinite_is_best = False
         self.dialogue_phase = "DONE"
         self.dialogue_timer = 0.0
-
-        self.start_level(1, infinite=False)
-        self.state = "MENU"
 
     # -- asset loading ---------------------------------------------------
 
@@ -404,6 +473,11 @@ class Game:
         self.bg = pygame.transform.smoothscale(
             load_image("Background.png", (VIRTUAL_W, VIRTUAL_H), (60, 38, 26)), (VIRTUAL_W, VIRTUAL_H)
         )
+        # Each moving answer paper gets one randomly chosen food-themed backdrop.
+        self.fallacy_paper_backgrounds = [
+            load_image(f"bg_fallacies/{name}_bg.png")
+            for name in ("bread", "lettuce", "cheese", "bacon")
+        ]
         self.bg_faded = pygame.transform.smoothscale(
             load_image("background_faded.png", (VIRTUAL_W, VIRTUAL_H), (90, 60, 40)), (VIRTUAL_W, VIRTUAL_H)
         )
@@ -412,8 +486,36 @@ class Game:
             self.logo, (110, round(110 * self.logo.get_height() / self.logo.get_width()))
         )
         self.dictionary_icon = load_image("dictionary icon.PNG", (48, 64), (214, 122, 54))
+        book = load_image("Untitled_Artwork 9.png", BOOK_CROP.size, (255, 247, 206))
+        if book.get_width() >= BOOK_CROP.right and book.get_height() >= BOOK_CROP.bottom:
+            book = book.subsurface(BOOK_CROP).copy()
+        self.book_image = pygame.transform.smoothscale(book, book_display_size())
+        width, height = self.book_image.get_size()
+        gutter = max(10, width // 24)
+        mid = width // 2
+        self.page_gutter = gutter
+        self.page_halves = (
+            self.book_image.subsurface(pygame.Rect(0, 0, mid - gutter, height)).copy(),
+            self.book_image.subsurface(pygame.Rect(mid + gutter, 0, width - mid - gutter, height)).copy(),
+        )
+        self.book_stitch = self.book_image.subsurface(
+            pygame.Rect(mid - gutter, 0, gutter * 2, height)
+        ).copy()
+        # Numbered files run backwards: #18 / DictionaryCard18 is fallacy 1.
+        self.dictionary_cards = {
+            fid: load_image(f"DictionaryCard{19 - fid:02d}.png", (480, 390), CARD_WHITE)
+            for fid in range(1, 19)
+        }
+        self.detail_cards = {
+            fid: load_image(f"Dictionary Card/#{19 - fid:02d}.png", (602, 376), CARD_WHITE)
+            for fid in range(1, 19)
+        }
+        self.add_cards = {
+            fid: load_image(f"Add cards/#{19 - fid:02d}.png", (602, 472), CARD_WHITE)
+            for fid in range(1, 19)
+        }
 
-        health_sheet = load_image("carrot_heath_bar.png", (2160, 1620), (214, 122, 54))
+        health_sheet = load_image("HealthBar_SpriteSheet.png", (11264, 1024), (214, 122, 54))
         self.health_frames: list[pygame.Surface] = []
         target_h = 60
         for x, y, w, h in HEALTH_ICON_RECTS:
@@ -429,15 +531,22 @@ class Game:
         self.tomato_frames = self.tomato.frames
         self.chef_frames = self.chef.frames
 
-        enemy_firsts = [self.peeler.frames[0]]
-        for sheet in ("Knife_SpriteSheet.png", "Pot_SpriteSheet.png"):
-            try:
-                enemy_firsts.append(SpriteStrip(ASSET_DIR / sheet, frame_count=5, painted_width=5585).frames[0])
-            except RuntimeError:
-                enemy_firsts.append(self.peeler.frames[0])
+        # The Peeler class only wraps a five-frame strip, so it draws every enemy.
+        self.enemies = {"Vegetable Peeler": self.peeler}
+        for name, sheet in ENEMY_SHEETS.items():
+            if name not in self.enemies:
+                try:
+                    self.enemies[name] = Peeler(ASSET_DIR / sheet)
+                except RuntimeError:
+                    self.enemies[name] = self.peeler
         diameter = LEVEL_CIRCLE_RECTS[0].width
-        self.level_portraits = [circle_portrait(f, diameter) for f in enemy_firsts]
-        self.level_portraits_locked = [circle_portrait(f, diameter, bg=(70, 70, 70), darken=True) for f in enemy_firsts]
+        self.enemy_portraits = {
+            name: circle_portrait(enemy.frames[0], diameter) for name, enemy in self.enemies.items()
+        }
+        self.enemy_portraits_locked = {
+            name: circle_portrait(enemy.frames[0], diameter, bg=(70, 70, 70), darken=True)
+            for name, enemy in self.enemies.items()
+        }
 
         self.tomato_frames = [scale_square(f, CHARACTER_SIZE) for f in self.tomato_frames]
         self.chef_frames = [
@@ -453,28 +562,18 @@ class Game:
 
     # -- level/session setup ---------------------------------------------
 
-    def start_level(self, level: int, infinite: bool) -> None:
-        self.level = level
-        self.infinite = infinite
+    def _reset_session(self) -> None:
         self.health = game_rules.HEALTH_MAX
-        info = game_data.LEVELS[level]
-        self.fallacy_ids = info["fallacy_ids"]
-        self.enemy_name = info["enemy"]
-
+        self.enemy_health = game_rules.OPPONENT_HEALTH_MAX
         self.selector = FallacySelector()
-        for fid in self.fallacy_ids:
+        for fid in range(1, len(FALLACIES) + 1):
             stats = self.selector.stats_for(fid)
             stats.correct = self.progress.mastery_counts.get(fid, 0)
             stats.mastered = (
                 fid in self.progress.mastered_ids or stats.correct >= game_rules.MASTERY_TARGET
             )
-
-        self.introduced_ids = [fid for fid in self.fallacy_ids if fid in self.progress.dictionary_ids]
-        self.pending_intro_queue = [
-            fid for fid in self.fallacy_ids if fid not in self.progress.dictionary_ids
-        ]
-        self.questions_since_intro = 0
         self.question_index = 0
+        self.infinite_correct = 0
         self.papers = []
         self.enemy_losses = 0
         self.enemy_flash = 0.0
@@ -482,47 +581,100 @@ class Game:
         self.toasts = []
         self.last_claim_for = {}
         self.show_dictionary = False
+        self.page_anim = None
+        self.zoomed_card = None
+        self.review_fallacy_id = None
+        self.review_clicks = 0
+        self.review_age = 0.0
         self.show_reset_confirm = False
+        self.paused = False
+        self.fail_reason = ""
         self.dialogue_phase = "DONE"
         self.dialogue_timer = 0.0
 
-        if infinite:
-            self.infinite_start_ms = pygame.time.get_ticks()
-            if self.introduced_ids:
-                self.next_question()
-            else:
-                self.state = "INTRO"
-        else:
-            self.state = "INTRO"
-
-    def begin_first_teaching(self) -> None:
-        if not self.pending_intro_queue:
-            self.next_question()
-            return
-        self.teaching_fallacy_id = self.pending_intro_queue.pop(0)
+    def start_level(self, level: int) -> None:
+        """Main level: meet all three new fallacies, warm up, then fight."""
+        self._reset_session()
+        self.level = level
+        self.infinite = False
+        self.fallacy_ids = game_data.LEVELS[level]["fallacy_ids"]
+        self.enemy_name = game_data.enemy_for_level(level)
+        self.teaching_ids = list(self.fallacy_ids)
+        self.teaching_added = set()
+        self.warmup_queue = []
+        self.phase = "WARMUP"
         self.state = "TEACHING"
 
-    def on_continue(self) -> None:
-        if self.introduced_ids:
-            self.next_question()
-        else:
-            self.begin_first_teaching()
-
-    def on_add_to_dictionary(self) -> None:
-        fid = self.teaching_fallacy_id
-        if fid is None:
-            return
-        self.progress.add_to_dictionary(fid)
-        self.introduced_ids.append(fid)
-        self.questions_since_intro = 0
-        self.teaching_fallacy_id = None
+    def start_infinite(self) -> None:
+        """Endless review of unlocked fallacies against beaten enemies."""
+        self._reset_session()
+        self.infinite = True
+        self.phase = "ROUND"
+        self.fallacy_ids = self._infinite_fallacy_ids()
+        self.infinite_start_ms = pygame.time.get_ticks()
         self.next_question()
+
+    def _completed_enemies(self) -> list[str]:
+        names = [game_data.enemy_for_level(lvl) for lvl in sorted(self.progress.completed_levels)
+                 if lvl in game_data.LEVELS]
+        return list(dict.fromkeys(names))
+
+    def _infinite_fallacy_ids(self) -> list[int]:
+        return sorted(self.progress.dictionary_ids)
+
+    def _infinite_available(self) -> bool:
+        return bool(self._completed_enemies()) and bool(self._infinite_fallacy_ids())
+
+    def _quizzable_ids(self) -> list[int]:
+        if self.infinite:
+            return self._infinite_fallacy_ids()
+        if self.phase == "WARMUP":
+            return self.warmup_queue[:1]
+        # Official round: everything unlocked up to and including this level.
+        newest = max(self.fallacy_ids)
+        return [fid for fid in sorted(self.progress.dictionary_ids) if fid <= newest] or list(self.fallacy_ids)
+
+    def on_add_to_dictionary(self, fid: int | None = None) -> None:
+        """Collect one of the three new cards; once all are in, warm up."""
+        if self.state != "TEACHING":
+            return
+        if fid is None:
+            remaining = [f for f in self.teaching_ids if f not in self.teaching_added]
+            if not remaining:
+                return
+            fid = remaining[0]
+        if fid not in self.teaching_ids or fid in self.teaching_added:
+            return
+        self.teaching_added.add(fid)
+        self.progress.add_to_dictionary(fid)
+        self.audio.play_sfx("dictionary")
+        if len(self.teaching_added) == len(self.teaching_ids):
+            self.warmup_queue = list(self.teaching_ids)
+            self.rng.shuffle(self.warmup_queue)
+            self.phase = "WARMUP"
+            self.toasts.append(["Warm-up: mistakes cost health.", TOAST_DURATION])
+            self.next_question()
 
     # -- questions ---------------------------------------------------
 
+    def _pick_infinite_enemy(self, fid: int) -> str:
+        enemies = self._completed_enemies() or [game_data.enemy_for_fallacy(fid)]
+        with_claims = [name for name in enemies if game_data.claims_for(name, fid)]
+        return self.rng.choice(with_claims or enemies)
+
     def next_question(self) -> None:
-        fid = self.selector.choose(self.introduced_ids, self.rng)
-        bank = game_data.claims_for(self.enemy_name, fid)
+        pool = self._quizzable_ids()
+        if not pool:
+            return
+        if self.phase == "WARMUP" and not self.infinite:
+            fid = pool[0]
+        else:
+            fid = self.selector.choose(pool, self.rng)
+        if self.infinite:
+            self.enemy_name = self._pick_infinite_enemy(fid)
+        bank = game_data.claims_for(self.enemy_name, fid) or game_data.claims_for(
+            game_data.enemy_for_fallacy(fid), fid
+        )
         if bank:
             last = self.last_claim_for.get(fid)
             choices = [c for c in bank if c != last] or bank
@@ -563,13 +715,20 @@ class Game:
             self.timer = self.timer_max
 
     def _build_papers(self, correct_id: int) -> None:
-        wrong_count = game_rules.wrong_option_count(self.level)
+        if self.infinite:
+            wrong_count = game_rules.infinite_option_count(self.infinite_correct) - 1
+        else:
+            wrong_count = game_rules.wrong_option_count(self.level)
         other_ids = [f.id for f in FALLACIES if f.id != correct_id]
         wrong_ids = self.rng.sample(other_ids, min(wrong_count, len(other_ids)))
         entries = [(FALLACIES_BY_ID[correct_id].name, True)]
         entries += [(FALLACIES_BY_ID[i].name, False) for i in wrong_ids]
         self.rng.shuffle(entries)
-        self.papers = [Paper(text, is_correct, PAPER_BOUNDS, self.rng) for text, is_correct in entries]
+        
+        self.papers = [
+            Paper(text, is_correct, PAPER_BOUNDS, self.rng, self.fallacy_paper_backgrounds)
+            for text, is_correct in entries
+        ]
 
     def handle_paper_click(self, pos: tuple[int, int]) -> None:
         if self.state != "GAMEPLAY" or self.answered or self.dialogue_phase != "DONE":
@@ -588,16 +747,34 @@ class Game:
         stats = self.selector.stats_for(fid)
         self.progress.record_mastery(fid, stats.correct)
 
+        warmup = self.phase == "WARMUP" and not self.infinite
         if correct:
-            self.health = min(game_rules.HEALTH_MAX, self.health + 1)
+            if self.infinite:
+                # Infinite mode keeps the old rule: correct answers heal.
+                self.health = min(game_rules.HEALTH_MAX, self.health + 1)
+                self.infinite_correct += 1
+            elif warmup:
+                if self.warmup_queue and self.warmup_queue[0] == fid:
+                    self.warmup_queue.pop(0)
+                self.enemy_health = max(0, self.enemy_health - 1)
+            else:
+                self.enemy_health = max(0, self.enemy_health - 1)
             self.enemy_losses += 1
             self.enemy_flash = FLASH_DURATION
             self.result_label = "CORRECT"
+            self.review_fallacy_id = None
+            self.review_clicks = 0
             self.audio.play_sfx("correct")
         else:
+            # Wrong answers always cost one health, including during warm-up.
             self.health = max(0, self.health - 1)
+            self.audio.play_sfx("chomp")
             self.tomato_flash = FLASH_DURATION
             self.result_label = "TIME OUT" if timeout else "INCORRECT"
+            # Show the matching dictionary card. It is not collected.
+            self.review_fallacy_id = fid
+            self.review_clicks = 0
+            self.review_age = 0.0
             self.audio.play_sfx("incorrect")
 
         self.result_correct = correct
@@ -607,31 +784,35 @@ class Game:
 
         self.feedback_timer = game_rules.FEEDBACK_HOLD_SECONDS
         self.question_index += 1
-        self.questions_since_intro += 1
         self.state = "FEEDBACK"
 
+    def _ack_review_card(self) -> None:
+        """A wrong-answer card stays up until the player clicks it twice."""
+        if self.state != "FEEDBACK" or self.review_fallacy_id is None:
+            return
+        self.review_clicks += 1
+        if self.review_clicks >= 2:
+            self.after_feedback()
+
     def after_feedback(self) -> None:
+        self.review_fallacy_id = None
+        self.review_clicks = 0
         if self.health <= 0:
             if self.infinite:
                 self.finish_infinite()
             else:
+                self.fail_reason = "Health depleted -- give it another go."
                 self.start_gavel("LEVEL_FAILED")
             return
 
-        if not self.infinite and self.selector.all_mastered(self.fallacy_ids):
+        if not self.infinite and self.enemy_health <= 0:
             self.progress.complete_level(self.level)
             self.start_gavel("LEVEL_COMPLETE")
             return
 
-        if (
-            not self.infinite
-            and self.pending_intro_queue
-            and self.questions_since_intro >= game_rules.TEACHING_INTERVAL
-        ):
-            self.teaching_fallacy_id = self.pending_intro_queue.pop(0)
-            self.questions_since_intro = 0
-            self.state = "TEACHING"
-            return
+        if not self.infinite and self.phase == "WARMUP" and not self.warmup_queue:
+            self.phase = "ROUND"
+            self.toasts.append(["Official round -- fight!", TOAST_DURATION])
 
         self.next_question()
 
@@ -639,21 +820,55 @@ class Game:
         self.gavel_target = target
         self.gavel_timer = GAVEL_DURATION
         self.state = "GAVEL"
+        self.audio.play_sfx("knife_hit")
 
     def finish_infinite(self) -> None:
         survived = (pygame.time.get_ticks() - self.infinite_start_ms) / 1000.0
         self.infinite_survived = survived
-        self.infinite_is_best = self.progress.record_infinite_result(self.level, survived)
+        self.infinite_is_best = self.progress.record_infinite_result(INFINITE_SAVE_KEY, survived)
         self.start_gavel("INFINITE_RESULTS")
 
     def reset_game(self) -> None:
         self.progress.reset()
-        self.start_level(1, infinite=False)
         self.state = "MENU"
+
+    # -- pause ---------------------------------------------------
+
+    def _can_pause(self) -> bool:
+        return self.state in ("TEACHING", "GAMEPLAY", "FEEDBACK") and not self.show_dictionary
+
+    def _pause(self) -> None:
+        if self._can_pause():
+            self.paused = True
+
+    def _resume(self) -> None:
+        self.paused = False
+
+    def _exit_level(self) -> None:
+        """Leaving a main level counts as failing it; leaving infinite mode is silent."""
+        self.paused = False
+        self.papers = []
+        self.review_fallacy_id = None
+        if self.infinite:
+            self.state = "LEVEL_SELECT"
+        else:
+            self.fail_reason = "You left the courtroom."
+            self.state = "LEVEL_FAILED"
 
     # -- update ---------------------------------------------------
 
+    def _desired_music(self) -> str | None:
+        state = self.pre_settings_state if self.state == "SETTINGS" else self.state
+        if state in LEVEL_MUSIC_STATES:
+            return "infinite" if self.infinite else LEVEL_MUSIC.get(self.level, "main")
+        return "main"
+
     def update(self, dt: float) -> None:
+        track = self._desired_music()
+        if track is not None:
+            self.audio.play_music(track)
+        if self.paused:
+            return
         if self.state == "GAMEPLAY" and not self.answered:
             if self.dialogue_phase != "DONE":
                 self._advance_dialogue(dt)
@@ -666,13 +881,25 @@ class Game:
                     for paper in self.papers:
                         paper.update(dt)
         elif self.state == "FEEDBACK":
-            self.feedback_timer -= dt
-            if self.feedback_timer <= 0:
-                self.after_feedback()
+            if self.review_fallacy_id is not None:
+                self.review_age += dt
+            else:
+                self.feedback_timer -= dt
+                if self.feedback_timer <= 0:
+                    self.after_feedback()
         elif self.state == "GAVEL":
             self.gavel_timer -= dt
             if self.gavel_timer <= 0:
                 self.state = self.gavel_target
+
+        if self.page_anim is not None:
+            self.page_anim["t"] += dt / PAGE_TURN_SECONDS
+            if self.page_anim["t"] >= 1.0:
+                self.dictionary_page = self.page_anim["target"]
+                self.page_anim = None
+
+        if self.zoomed_card is not None:
+            self.zoom_t = min(1.0, self.zoom_t + dt / 0.18)
 
         self.enemy_flash = max(0.0, self.enemy_flash - dt)
         self.tomato_flash = max(0.0, self.tomato_flash - dt)
@@ -682,13 +909,12 @@ class Game:
 
     # -- frame emotion mapping ---------------------------------------------------
 
-    def _enemy_frame(self) -> pygame.Surface:
-        return self.peeler_frames[self._enemy_frame_index()]
-
     def _enemy_frame_index(self) -> int:
         if self.enemy_flash > 0:
-            return min(4, len(self.peeler_frames) - 1)
-        return min(3, self.enemy_losses // 3, len(self.peeler_frames) - 1)
+            return 4
+        if self.infinite:
+            return min(3, self.enemy_losses // 3)
+        return min(3, game_rules.OPPONENT_HEALTH_MAX - self.enemy_health)
 
     def _tomato_frame(self) -> pygame.Surface:
         if self.tomato_flash > 0:
@@ -708,7 +934,19 @@ class Game:
             self._layout_dictionary_buttons()
             return
 
-        if self.state in ("INTRO", "FEEDBACK", "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
+        if self.paused:
+            cont = pygame.Rect(0, 0, 260, 58)
+            cont.center = (PAUSE_POPUP_RECT.centerx, PAUSE_POPUP_RECT.top + 150)
+            leave = cont.copy()
+            leave.center = (PAUSE_POPUP_RECT.centerx, PAUSE_POPUP_RECT.top + 230)
+            self.buttons.append(Button(cont, "Continue", self._resume))
+            self.buttons.append(Button(leave, "Exit Game", self._exit_level))
+            return
+
+        if self._can_pause():
+            self.buttons.append(Button(PAUSE_BUTTON_RECT, "", self._pause, style="icon", icon="pause"))
+
+        if self.state in ("LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
             self.buttons.append(Button(pygame.Rect(1196, 18, 56, 56), "", self._open_dictionary,
                                        style="icon", icon="book"))
             self.buttons.append(Button(pygame.Rect(1126, 18, 56, 56), "", self._open_settings,
@@ -723,19 +961,23 @@ class Game:
             self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._go_menu, style="icon", icon="return"))
         elif self.state == "LEVEL_SELECT":
             self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._go_menu, style="icon", icon="return"))
-            for i, level in enumerate((1, 2, 3)):
+            self.buttons.append(Button(INFINITE_BUTTON_RECT, "Infinite Mode", self.start_infinite,
+                                       enabled=self._infinite_available()))
+            for level, rect in zip(sorted(game_data.LEVELS), LEVEL_CIRCLE_RECTS):
                 unlocked = self._level_unlocked(level)
                 action = (lambda lvl=level: self._select_level(lvl)) if unlocked else self._noop
-                self.buttons.append(
-                    Button(LEVEL_CIRCLE_RECTS[i], "", action, enabled=unlocked, style="hidden")
-                )
-        elif self.state == "INTRO":
-            self.buttons.append(
-                Button(pygame.Rect(540, 560, 200, 60), "Continue", self.on_continue)
-            )
+                self.buttons.append(Button(rect, "", action, enabled=unlocked, style="hidden"))
         elif self.state == "TEACHING":
+            for fid in self.teaching_ids:
+                if fid in self.teaching_added:
+                    continue
+                _card, button_rect = self._add_card_layout(fid)
+                self.buttons.append(
+                    Button(button_rect, "Add To Your Dictionary", lambda fid=fid: self.on_add_to_dictionary(fid))
+                )
+        elif self.state == "FEEDBACK" and self.review_fallacy_id is not None:
             self.buttons.append(
-                Button(pygame.Rect(300, 556, 680, 56), "Add To Your Dictionary", self.on_add_to_dictionary)
+                Button(pygame.Rect(0, 0, VIRTUAL_W, VIRTUAL_H), "", self._ack_review_card, style="hidden")
             )
         elif self.state in ("LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
             home = pygame.Rect(0, 0, 88, 88)
@@ -753,12 +995,37 @@ class Game:
     def _layout_dictionary_buttons(self) -> None:
         self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._close_dictionary,
                                    style="icon", icon="return"))
-        entries = sorted(self.progress.dictionary_ids)
-        if entries:
-            self.buttons.append(Button(pygame.Rect(150, 330, 72, 72), "", self._prev_page,
-                                       style="icon", icon="prev"))
-            self.buttons.append(Button(pygame.Rect(1058, 330, 72, 72), "", self._next_page,
-                                       style="icon", icon="next"))
+        if self.zoomed_card is not None:
+            self.buttons.append(
+                Button(pygame.Rect(0, 0, VIRTUAL_W, VIRTUAL_H), "", self._close_zoom, style="hidden")
+            )
+            return
+        origin, left_rect, right_rect = self._book_geometry()
+        turning = self.page_anim is not None
+        if not turning:
+            self._layout_card_buttons(left_rect, right_rect)
+        if self._spread_count() <= 1:
+            return
+        left_half, right_half = self._half_rects(origin)
+        self.buttons.append(
+            Button(pygame.Rect(left_half.left - 80, left_half.centery - 36, 72, 72), "", self._prev_page,
+                   enabled=not turning, style="icon", icon="prev")
+        )
+        self.buttons.append(
+            Button(pygame.Rect(right_half.right + 8, right_half.centery - 36, 72, 72), "", self._next_page,
+                   enabled=not turning, style="icon", icon="next")
+        )
+        self.buttons.append(Button(left_half, "", self._prev_page, enabled=not turning, style="hidden"))
+        self.buttons.append(Button(right_half, "", self._next_page, enabled=not turning, style="hidden"))
+
+    def _layout_card_buttons(self, left_rect: pygame.Rect, right_rect: pygame.Rect) -> None:
+        ids = self._spread_ids(self.dictionary_page)
+        slots = self._page_slots(left_rect) + self._page_slots(right_rect)
+        for fid, slot in zip(ids, slots):
+            if fid is None:
+                continue
+            hit = self._fitted_rect(self.dictionary_cards[fid], slot)
+            self.buttons.append(Button(hit, "", lambda fid=fid: self._open_card(fid), style="hidden"))
 
     def _layout_settings_buttons(self) -> None:
         self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._close_settings,
@@ -776,19 +1043,64 @@ class Game:
     def _open_dictionary(self) -> None:
         self.show_dictionary = True
         self.dictionary_page = 0
+        self.page_anim = None
+        self.zoomed_card = None
 
     def _close_dictionary(self) -> None:
         self.show_dictionary = False
+        self.page_anim = None
+        self.zoomed_card = None
+
+    def _open_card(self, fid: int) -> None:
+        if self.page_anim is not None:
+            return
+        self.zoomed_card = fid
+        self.zoom_t = 0.0
+
+    def _close_zoom(self) -> None:
+        self.zoomed_card = None
+
+    def _dictionary_entries(self) -> list[int]:
+        return sorted(self.progress.dictionary_ids)
+
+    def _spread_starts(self) -> list[int]:
+        """Each picture is a window of four cards, two on each page.
+
+        Windows step forward, and the last one is pulled back so it is
+        still four cards whenever that many have been collected.
+        """
+        count = len(self._dictionary_entries())
+        if count == 0:
+            return []
+        if count <= CARDS_PER_SPREAD:
+            return [0]
+        last = count - CARDS_PER_SPREAD
+        starts = list(range(0, last + 1, 2))
+        if starts[-1] != last:
+            starts.append(last)
+        return starts
+
+    def _spread_count(self) -> int:
+        return len(self._spread_starts())
+
+    def _turn_page(self, direction: int) -> None:
+        if self.page_anim is not None or self.zoomed_card is not None:
+            return
+        spreads = self._spread_count()
+        if spreads <= 1:
+            return
+        self.page_anim = {
+            "t": 0.0,
+            "direction": direction,
+            "from": self.dictionary_page,
+            "target": (self.dictionary_page + direction) % spreads,
+        }
 
     def _prev_page(self) -> None:
-        entries = sorted(self.progress.dictionary_ids)
-        if entries:
-            self.dictionary_page = (self.dictionary_page - 1) % len(entries)
+        self._turn_page(-1)
 
     def _next_page(self) -> None:
-        entries = sorted(self.progress.dictionary_ids)
-        if entries:
-            self.dictionary_page = (self.dictionary_page + 1) % len(entries)
+        self._turn_page(1)
 
     def _open_settings(self) -> None:
         self.pre_settings_state = self.state
@@ -799,11 +1111,39 @@ class Game:
         self.show_reset_confirm = False
         self.state = self.pre_settings_state
 
-    def _toggle_music(self) -> None:
-        self.audio.set_music_enabled(not self.audio.music_on)
+    def _set_slider(self, index: int, x: float) -> None:
+        track = SETTINGS_SLIDER_RECTS[index]
+        volume = max(0.0, min(1.0, (x - track.left) / track.width))
+        if index == 0:
+            self.audio.set_music_volume(volume)
+        else:
+            self.audio.set_sfx_volume(volume)
 
-    def _toggle_sfx(self) -> None:
-        self.audio.set_sfx_enabled(not self.audio.sfx_on)
+    def _save_volumes(self) -> None:
+        self.progress.music_volume = self.audio.music_volume
+        self.progress.sfx_volume = self.audio.sfx_volume
+        self.progress.save()
+
+    def handle_press(self, pos: tuple[int, int]) -> bool:
+        """Start a volume-slider drag; returns True when the press hit a slider."""
+        if self.state != "SETTINGS":
+            return False
+        for i, row in enumerate(SETTINGS_ROW_RECTS):
+            if row.inflate(0, 10).collidepoint(pos):
+                self.dragging_slider = i
+                self._set_slider(i, pos[0])
+                return True
+        return False
+
+    def handle_drag(self, pos: tuple[int, int]) -> None:
+        if self.dragging_slider is not None:
+            self._set_slider(self.dragging_slider, pos[0])
+
+    def handle_release(self) -> None:
+        if self.dragging_slider is not None:
+            self.dragging_slider = None
+            self._save_volumes()
+            self.audio.play_sfx("click")
 
     def _ask_reset(self) -> None:
         self.show_reset_confirm = True
@@ -815,10 +1155,10 @@ class Game:
         self.reset_game()
 
     def _replay_infinite(self) -> None:
-        self.start_level(self.level, infinite=True)
+        self.start_infinite()
 
     def _try_again(self) -> None:
-        self.start_level(self.level, infinite=False)
+        self.start_level(self.level)
 
     def _go_home(self) -> None:
         self.state = "MENU"
@@ -833,21 +1173,19 @@ class Game:
         self.state = "LEVEL_SELECT"
 
     def _level_unlocked(self, level: int) -> bool:
-        if level == 1:
-            return True
-        enemy = game_data.LEVELS[level]["enemy"]
-        return any(game_data.CLAIMS.get(enemy, {}).values())
+        """Levels open in order: each needs the previous one completed."""
+        if level not in game_data.LEVELS:
+            return False
+        return level == 1 or (level - 1) in self.progress.completed_levels
 
     def _select_level(self, level: int) -> None:
-        if not self._level_unlocked(level):
-            return
-        infinite = level in self.progress.completed_levels
-        self.start_level(level, infinite=infinite)
+        if self._level_unlocked(level):
+            self.start_level(level)
 
     def _next_level(self) -> None:
         next_level = self.level + 1
-        if next_level in game_data.LEVELS and self._level_unlocked(next_level):
-            self.start_level(next_level, infinite=False)
+        if self._level_unlocked(next_level):
+            self.start_level(next_level)
         else:
             self.state = "LEVEL_SELECT"
 
@@ -859,14 +1197,21 @@ class Game:
     def handle_click(self, pos: tuple[int, int]) -> None:
         for button in self.buttons:
             if button.enabled and button.rect.collidepoint(pos):
+                self.audio.play_sfx("click")
                 button.action()
                 return
-        if not self.show_dictionary and self.state != "SETTINGS":
+        if not self.paused and not self.show_dictionary and self.state != "SETTINGS":
             self.handle_paper_click(pos)
 
     # -- drawing ---------------------------------------------------
 
     def draw(self, surf: pygame.Surface) -> None:
+        if self.show_dictionary:
+            surf.blit(self.bg, (0, 0))
+            self._draw_dictionary(surf)
+            self._draw_ui_buttons(surf)
+            return
+
         faded_states = ("MENU", "HOW_TO_PLAY", "LEVEL_SELECT", "SETTINGS",
                         "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS")
         surf.blit(self.bg_faded if self.state in faded_states else self.bg, (0, 0))
@@ -881,11 +1226,9 @@ class Game:
             self._draw_level_select(surf)
         elif self.state == "SETTINGS":
             self._draw_settings(surf)
-        elif self.state == "INTRO":
-            self._draw_intro(surf)
         elif self.state == "TEACHING":
             self._draw_hud(surf)
-            self._draw_teaching_card(surf)
+            self._draw_teaching_cards(surf)
         elif self.state in ("GAMEPLAY", "FEEDBACK"):
             self._draw_gameplay(surf)
         elif self.state == "GAVEL":
@@ -900,9 +1243,12 @@ class Game:
 
         self._draw_toasts(surf)
 
-        if self.show_dictionary:
-            self._draw_dictionary(surf)
+        if self.paused:
+            self._draw_pause_popup(surf)
 
+        self._draw_ui_buttons(surf)
+
+    def _draw_ui_buttons(self, surf: pygame.Surface) -> None:
         for button in self.buttons:
             if button.style == "icon":
                 font = self.fonts["body_bold"]
@@ -915,14 +1261,47 @@ class Game:
             button.draw(surf, font)
 
     def _draw_hud(self, surf: pygame.Surface) -> None:
-        health_frame = self.health_frames[
-            min(len(self.health_frames) - 1, game_rules.HEALTH_MAX - self.health)
-        ]
-        surf.blit(health_frame, (30, 18))
+        if self.health > 0:
+            health_frame = self.health_frames[
+                min(len(self.health_frames) - 1, game_rules.HEALTH_MAX - self.health)
+            ]
+            # Mirror the rendered UI sprite; the source sprite sheet is unchanged.
+            flipped_health_frame = pygame.transform.flip(health_frame, True, False)
+            surf.blit(flipped_health_frame, (92, 14))
+        draw_outlined_text(surf, self.fonts["body_bold"], "You", (150, 84), width=2)
 
-        title = f"Food Court -- Level {self.level}" + (" (Infinite)" if self.infinite else "")
-        label = self.fonts["large"].render(title, True, (250, 240, 225))
-        surf.blit(label, label.get_rect(midtop=(VIRTUAL_W // 2, 16)))
+        if self.infinite:
+            title = "Infinite Mode"
+        else:
+            title = f"Level {self.level}" + (" -- Warm-up" if self.phase == "WARMUP" else "")
+            self._draw_opponent_bar(surf)
+        draw_outlined_text(surf, self.fonts["large"], title, (VIRTUAL_W // 2, 34), width=3)
+
+    def _draw_opponent_bar(self, surf: pygame.Surface) -> None:
+        """Show the enemy's health with the same carrot damage sprites as Tomato."""
+        if self.enemy_health > 0:
+            frame_index = min(
+                len(self.health_frames) - 1,
+                game_rules.OPPONENT_HEALTH_MAX - self.enemy_health,
+            )
+            frame = self.health_frames[frame_index]
+            surf.blit(frame, frame.get_rect(topright=(VIRTUAL_W - 18, 14)))
+
+        draw_outlined_text(
+            surf,
+            self.fonts["small"],
+            self.enemy_name,
+            (VIRTUAL_W - 92 - 140, 84),
+            width=2,
+        )
+
+    def _draw_pause_popup(self, surf: pygame.Surface) -> None:
+        dim = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
+        dim.fill((*OVERLAY_DARK, 170))
+        surf.blit(dim, (0, 0))
+        self._draw_white_card(surf, PAUSE_POPUP_RECT)
+        label = self.fonts["title_bold"].render("PAUSED", True, BUTTON_BORDER)
+        surf.blit(label, label.get_rect(center=(PAUSE_POPUP_RECT.centerx, PAUSE_POPUP_RECT.top + 62)))
 
     def _draw_menu(self, surf: pygame.Surface) -> None:
         paper = pygame.Rect(460, 90, 360, 490)
@@ -941,17 +1320,17 @@ class Game:
         surf.blit(title, title.get_rect(center=(panel.centerx, panel.top + 50)))
 
         lines = [
-            "A fallacy claim appears -- read it, then watch the moving",
-            "answer papers appear below it.",
+            "Each level teaches three new fallacies. Add all three cards",
+            "to your dictionary, then warm up -- wrong answers cost health.",
             "",
-            "Click the paper naming the fallacy in the claim before the",
-            "ten-second timer runs out.",
+            "In the official round, click the moving paper that names the",
+            "fallacy in each claim before the ten-second timer runs out.",
             "",
-            "Correct answers restore a carrot health piece; wrong answers",
-            "and timeouts cost one. Lose all five and the level is failed.",
+            "Right answers hit your opponent; wrong answers and timeouts hit",
+            "you. Neither side heals. Empty the opponent's bar to win.",
             "",
-            "Identify each fallacy correctly three times to master it.",
-            "Master every fallacy in a level to complete it.",
+            "Beat a level to unlock Infinite Mode: endless review where right",
+            "answers heal you and more papers appear as you go.",
         ]
         y = panel.top + 110
         for line in lines:
@@ -961,80 +1340,66 @@ class Game:
             y += self.fonts["body"].get_height() + 6
 
     def _draw_level_select(self, surf: pygame.Surface) -> None:
-        for i, (level, rect) in enumerate(zip((1, 2, 3), LEVEL_CIRCLE_RECTS)):
+        if self._infinite_available():
+            best = self.progress.infinite_best_seconds.get(INFINITE_SAVE_KEY, 0.0)
+            hint = f"Best run: {best:.1f}s" if best else "Review everything you've unlocked"
+        else:
+            hint = "Complete a level to unlock"
+        draw_outlined_text(surf, self.fonts["small"], hint,
+                           (INFINITE_BUTTON_RECT.centerx, INFINITE_BUTTON_RECT.bottom + 18), width=2)
+
+        for level, rect in zip(sorted(game_data.LEVELS), LEVEL_CIRCLE_RECTS):
             unlocked = self._level_unlocked(level)
+            enemy = game_data.enemy_for_level(level)
             pygame.draw.circle(surf, (60, 34, 20), (rect.centerx + 3, rect.centery + 5), rect.width // 2)
-            portrait = self.level_portraits[i] if unlocked else self.level_portraits_locked[i]
+            portrait = self.enemy_portraits[enemy] if unlocked else self.enemy_portraits_locked[enemy]
             surf.blit(portrait, rect)
             if not unlocked:
-                draw_icon(surf, "lock", rect.center, 80, (245, 245, 245))
+                draw_icon(surf, "lock", rect.center, 64, (245, 245, 245))
             label = f"LVL {level}" if unlocked else "LOCKED"
-            draw_outlined_text(surf, self.fonts["title_bold"], label, (rect.centerx, rect.bottom + 34), width=3)
+            draw_outlined_text(surf, self.fonts["large"], label, (rect.centerx, rect.bottom + 28), width=3)
             if level in self.progress.completed_levels:
-                check_center = (rect.right - 22, rect.bottom - 26)
-                draw_icon(surf, "check", (check_center[0] + 2, check_center[1] + 2), 44, (30, 70, 30))
-                draw_icon(surf, "check", check_center, 44, (70, 190, 80))
-                hint = self.fonts["small"].render("replay = infinite mode", True, (250, 240, 225))
-                surf.blit(hint, hint.get_rect(midtop=(rect.centerx, rect.bottom + 62)))
+                check_center = (rect.right - 18, rect.bottom - 20)
+                draw_icon(surf, "check", (check_center[0] + 2, check_center[1] + 2), 36, (30, 70, 30))
+                draw_icon(surf, "check", check_center, 36, (70, 190, 80))
 
-    def _draw_intro(self, surf: pygame.Surface) -> None:
-        self._draw_hud(surf)
-        logo = pygame.transform.smoothscale(self.logo, (420, int(420 * self.logo.get_height() / self.logo.get_width())))
-        surf.blit(logo, logo.get_rect(center=(VIRTUAL_W // 2, 280)))
-        sub = self.fonts["body"].render(
-            f"{self.enemy_name} awaits in the food court.", True, (250, 240, 225)
-        )
-        surf.blit(sub, sub.get_rect(center=(VIRTUAL_W // 2, 480)))
+    def _fitted_card(self, image: pygame.Surface, max_size: tuple[int, int], center: tuple[int, int]) -> pygame.Rect:
+        fit = min(max_size[0] / image.get_width(), max_size[1] / image.get_height())
+        rect = pygame.Rect(0, 0, max(1, round(image.get_width() * fit)), max(1, round(image.get_height() * fit)))
+        rect.center = center
+        return rect
 
-    def _draw_teaching_card(self, surf: pygame.Surface) -> None:
-        fid = self.teaching_fallacy_id
-        if fid is None:
-            return
-        fallacy = FALLACIES_BY_ID[fid]
+    def _add_card_layout(self, fid: int) -> tuple[pygame.Rect, pygame.Rect]:
+        """New cards sit side by side, each with its own add button underneath."""
+        image = self.add_cards[fid]
+        count = max(1, len(self.teaching_ids))
+        index = self.teaching_ids.index(fid) if fid in self.teaching_ids else 0
+        slot_w = (VIRTUAL_W - 40) // count
+        center = (20 + slot_w * index + slot_w // 2, 360)
+        card = self._fitted_card(image, (slot_w - 16, 380), center)
+        button = pygame.Rect(0, 0, card.width - 40, 54)
+        button.midtop = (card.centerx, card.bottom + 18)
+        return card, button
 
+    def _draw_teaching_cards(self, surf: pygame.Surface) -> None:
         overlay = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
-        overlay.fill((*OVERLAY_DARK, 190))
+        overlay.fill((*OVERLAY_DARK, 160))
         surf.blit(overlay, (0, 0))
-
-        card = pygame.Rect(220, 100, 840, 520)
-        pygame.draw.rect(surf, CARD_WHITE, card, border_radius=26)
-
-        inset = 34
-        for corner in (
-            (card.left + inset, card.top + inset),
-            (card.right - inset, card.top + inset),
-            (card.left + inset, card.bottom - inset),
-            (card.right - inset, card.bottom - inset),
-        ):
-            draw_sparkle(surf, corner, 13, SPARKLE_COLOR)
-
-        number_text = self.fonts["title_bold"].render(f"{fallacy.id}  {fallacy.name}", True, (20, 16, 12))
-        title_pos = (card.left + 64, card.top + 44)
-        surf.blit(number_text, title_pos)
-        if fallacy.alt_name:
-            alt_text = self.fonts["body_bold"].render(f"({fallacy.alt_name})", True, (20, 16, 12))
-            alt_x = title_pos[0] + number_text.get_width() + 16
-            alt_y = title_pos[1] + (number_text.get_height() - alt_text.get_height()) // 2
-            surf.blit(alt_text, (alt_x, alt_y))
-
-        y = card.top + 118
-        for line in wrap_text(fallacy.definition, self.fonts["body"], card.width - 128):
-            label = self.fonts["body"].render(line, True, (40, 34, 28))
-            surf.blit(label, (card.left + 64, y))
-            y += self.fonts["body"].get_height() + 2
-        y += 28
-
-        example_header = self.fonts["body_bold"].render("Example", True, (20, 16, 12))
-        surf.blit(example_header, (card.left + 64, y))
-        y += example_header.get_height() + 10
-
-        examples = game_data.claims_for(self.enemy_name, fid)[:2]
-        for claim in examples:
-            for line in wrap_text(f"“{claim}”", self.fonts["body"], card.width - 128):
-                label = self.fonts["body"].render(line, True, (40, 34, 28))
-                surf.blit(label, (card.left + 64, y))
-                y += self.fonts["body"].get_height() + 2
-            y += 14
+        draw_outlined_text(surf, self.fonts["title_bold"], "New Fallacies!", (VIRTUAL_W // 2, 130), width=3)
+        added = f"Add all three to start the warm-up  ({len(self.teaching_added)}/{len(self.teaching_ids)})"
+        draw_outlined_text(surf, self.fonts["body"], added, (VIRTUAL_W // 2, 172), width=2)
+        for fid in self.teaching_ids:
+            image = self.add_cards.get(fid)
+            if image is None:
+                continue
+            card, button = self._add_card_layout(fid)
+            surf.blit(pygame.transform.smoothscale(image, card.size), card)
+            if fid in self.teaching_added:
+                pygame.draw.rect(surf, CORRECT_COLOR, button, border_radius=14)
+                pygame.draw.rect(surf, (40, 100, 50), button, 3, border_radius=14)
+                draw_icon(surf, "check", (button.centerx - 60, button.centery), 26, (255, 255, 255))
+                added = self.fonts["body_bold"].render("Added", True, (255, 255, 255))
+                surf.blit(added, added.get_rect(center=(button.centerx + 14, button.centery)))
 
     def _draw_gameplay(self, surf: pygame.Surface) -> None:
         self._draw_hud(surf)
@@ -1052,7 +1417,7 @@ class Game:
             shake_duration=FLASH_DURATION,
         )
 
-        self.peeler.draw(
+        self.enemies.get(self.enemy_name, self.peeler).draw(
             surf, self._enemy_frame_index(), ENEMY_ANCHOR,
             CHARACTER_SIZE,
             flip_x=True,
@@ -1061,8 +1426,10 @@ class Game:
             shake_duration=FLASH_DURATION,
         )
 
-        voice_box = pygame.Rect(60, 580, 1160, 110)
-        center_box = pygame.Rect(0, 0, 900, 220)
+        # The dialogue starts large in the center, then shrinks into the lower
+        # speaker box where the enemy name (for example, "Peeler:") is shown.
+        voice_box = pygame.Rect(160, 520, 960, 180)
+        center_box = pygame.Rect(160, 0, 960, 240)
         center_box.center = (VIRTUAL_W // 2, 300)
 
         if self.dialogue_phase == "CENTER":
@@ -1083,17 +1450,22 @@ class Game:
             pygame.draw.rect(surf, (235, 190, 90), fill_rect, border_radius=8)
             pygame.draw.rect(surf, PANEL_BORDER, bar_rect, width=2, border_radius=8)
 
-            for paper in self.papers:
-                paper.draw(surf, self.fonts["paper"])
+
+    #floating ingredients fallacies
+            if not self.paused:  # no free study time behind the pause menu
+                for paper in self.papers:
+                    paper.draw(surf, self.fonts["paper"])
 
         draw_panel(surf, claim_box, radius=16)
         speaker = self.fonts["body"].render(f"{self.enemy_name}:", True, PANEL_BORDER)
-        surf.blit(speaker, (claim_box.left + 24, claim_box.top + 12))
+        surf.blit(speaker, (claim_box.left + 24, claim_box.top + 20))
         for i, line in enumerate(wrap_text(self.current_claim, self.fonts["body"], claim_box.width - 48)[:4]):
             label = self.fonts["body"].render(line, True, TEXT_DARK)
-            surf.blit(label, (claim_box.left + 24, claim_box.top + 44 + i * 26))
+            surf.blit(label, (claim_box.left + 24, claim_box.top + 60 + i * 26))
 
         if self.state == "FEEDBACK":
+            if self.review_fallacy_id is not None:
+                self._draw_review_flashcard(surf)
             self._draw_feedback_banner(surf)
 
     def _draw_gameplay_frozen(self, surf: pygame.Surface) -> None:
@@ -1104,25 +1476,71 @@ class Game:
 
     def _draw_feedback_banner(self, surf: pygame.Surface) -> None:
         color = CORRECT_COLOR if self.result_correct else INCORRECT_COLOR
-        total = game_rules.FEEDBACK_HOLD_SECONDS
-        elapsed = max(0.0, total - self.feedback_timer)
-
-        if elapsed < FEEDBACK_ENTER_SECONDS:
-            t = elapsed / FEEDBACK_ENTER_SECONDS
-            x_offset = (1 - t) * VIRTUAL_W
-        elif elapsed > total - FEEDBACK_EXIT_SECONDS:
-            t = (elapsed - (total - FEEDBACK_EXIT_SECONDS)) / FEEDBACK_EXIT_SECONDS
-            x_offset = -t * VIRTUAL_W
+        image = self._banner_surface(self.result_label, color)
+        if self.review_fallacy_id is not None:
+            elapsed = self.review_age
+            if elapsed < FEEDBACK_ENTER_SECONDS:
+                t = elapsed / FEEDBACK_ENTER_SECONDS
+                u = t - 1
+                settle = 1 + 1.18 * u ** 3 + 0.18 * u ** 2
+                x_offset = -image.get_width() + (image.get_width() - 24) * settle
+            else:
+                x_offset = -24
         else:
-            x_offset = 0.0
+            total = game_rules.FEEDBACK_HOLD_SECONDS
+            elapsed = max(0.0, total - self.feedback_timer)
 
-        bar_h = 120
-        banner = pygame.Rect(int(x_offset), 0, VIRTUAL_W, bar_h)
-        banner.centery = 220
-        pygame.draw.rect(surf, color, banner)
-        pygame.draw.rect(surf, (255, 255, 255), banner, width=4)
-        label = self.fonts["title_bold"].render(self.result_label, True, (255, 255, 255))
-        surf.blit(label, label.get_rect(center=banner.center))
+            if elapsed < FEEDBACK_ENTER_SECONDS:
+                t = elapsed / FEEDBACK_ENTER_SECONDS
+                u = t - 1
+                settle = 1 + 1.18 * u ** 3 + 0.18 * u ** 2
+                x_offset = -image.get_width() + (image.get_width() - 24) * settle
+            elif elapsed > total - FEEDBACK_EXIT_SECONDS:
+                t = (elapsed - (total - FEEDBACK_EXIT_SECONDS)) / FEEDBACK_EXIT_SECONDS
+                x_offset = -24 + (VIRTUAL_W + 24) * t ** 3
+            else:
+                x_offset = -24
+
+        surf.blit(image, (round(x_offset), 150 - image.get_height() // 2))
+
+    def _banner_surface(
+        self, text: str, background: tuple[int, int, int]
+    ) -> pygame.Surface:
+        """Return a cached red or green result ribbon with its message."""
+        key = (text, background)
+        if key not in self.banner_cache:
+            width, height = VIRTUAL_W + 48, 120
+            image = pygame.Surface((width, height + 14), pygame.SRCALPHA)
+            pygame.draw.polygon(
+                image,
+                (39, 12, 9, 100),
+                [(0, 12), (width, height // 2 + 12), (width, height + 12), (0, height + 12)],
+            )
+
+            if background == CORRECT_COLOR:
+                edge, highlight, shade, accent = (30, 96, 59), (134, 190, 145), (23, 77, 48), (78, 153, 104)
+            else:
+                edge, highlight, shade, accent = (164, 47, 42), (237, 141, 106), (121, 39, 31), (218, 101, 83)
+
+            pygame.draw.polygon(
+                image,
+                edge,
+                [(0, 0), (width, 0), (width - 20, height // 2), (width, height), (0, height), (20, height // 2)],
+            )
+            pygame.draw.rect(image, background, (20, 9, width - 40, height - 18))
+            pygame.draw.line(image, highlight, (24, 12), (width - 24, 12), 2)
+            pygame.draw.line(image, shade, (24, height - 10), (width - 24, height - 10), 3)
+            for x in (75, 105, width - 125, width - 95):
+                pygame.draw.polygon(
+                    image,
+                    accent,
+                    [(x, 28), (x + 10, 28), (x - 14, height - 28), (x - 24, height - 28)],
+                )
+
+            label = self.banner_font.render(text, True, (255, 246, 229))
+            image.blit(label, label.get_rect(center=(width // 2, height // 2)))
+            self.banner_cache[key] = image
+        return self.banner_cache[key]
 
     def _draw_gavel(self, surf: pygame.Surface) -> None:
         progress = 1 - max(0.0, self.gavel_timer) / GAVEL_DURATION
@@ -1154,9 +1572,9 @@ class Game:
         surf.blit(tomato_img, tomato_img.get_rect(center=(card.centerx, card.top + 200)))
 
         if title == "LEVEL COMPLETE":
-            sub = f"All {len(self.fallacy_ids)} fallacies mastered!"
+            sub = f"{self.enemy_name} is out of health!"
         else:
-            sub = "Health depleted -- give it another go."
+            sub = self.fail_reason or "Health depleted -- give it another go."
         sub_label = self.fonts["small"].render(sub, True, (90, 80, 70))
         surf.blit(sub_label, sub_label.get_rect(center=(card.centerx, card.top + 310)))
 
@@ -1167,7 +1585,7 @@ class Game:
         surf.blit(label, label.get_rect(center=(card.centerx, card.top + 62)))
         survived = self.fonts["title"].render(f"{self.infinite_survived:.1f}s", True, TEXT_DARK)
         surf.blit(survived, survived.get_rect(center=(card.centerx, card.top + 150)))
-        best = self.progress.infinite_best_seconds.get(self.level, 0.0)
+        best = self.progress.infinite_best_seconds.get(INFINITE_SAVE_KEY, 0.0)
         best_label = self.fonts["body"].render(f"Best: {best:.1f}s", True, TEXT_DARK)
         surf.blit(best_label, best_label.get_rect(center=(card.centerx, card.top + 210)))
         if self.infinite_is_best:
@@ -1189,55 +1607,218 @@ class Game:
             surf.blit(label, label.get_rect(center=box.center))
             y += 50
 
+    def _book_geometry(self) -> tuple[tuple[int, int], pygame.Rect, pygame.Rect]:
+        bw, bh = self.book_image.get_size()
+        origin = ((VIRTUAL_W - bw) // 2, (VIRTUAL_H - bh) // 2)
+        scale_x = bw / BOOK_CROP.width
+        scale_y = bh / BOOK_CROP.height
+
+        def map_rect(src: pygame.Rect) -> pygame.Rect:
+            return pygame.Rect(
+                origin[0] + round((src.left - BOOK_CROP.left) * scale_x),
+                origin[1] + round((src.top - BOOK_CROP.top) * scale_y),
+                max(1, round(src.width * scale_x)),
+                max(1, round(src.height * scale_y)),
+            )
+
+        return origin, map_rect(LEFT_PAGE_SRC), map_rect(RIGHT_PAGE_SRC)
+
+    def _half_rects(self, origin: tuple[int, int]) -> tuple[pygame.Rect, pygame.Rect]:
+        width, height = self.book_image.get_size()
+        mid = width // 2
+        gutter = self.page_gutter
+        left = pygame.Rect(origin[0], origin[1], mid - gutter, height)
+        right = pygame.Rect(origin[0] + mid + gutter, origin[1], width - mid - gutter, height)
+        return left, right
+
+    def _spread_ids(self, spread: int) -> tuple[int | None, ...]:
+        """Four slots: left top, left bottom, right top, right bottom.
+
+        Cards fill across the book first (left top, right top, then the
+        bottoms) so each picture has two cards on each page.
+        """
+        entries = self._dictionary_entries()
+        starts = self._spread_starts()
+        if not starts:
+            return (None, None, None, None)
+        start = starts[spread % len(starts)]
+        window = entries[start:start + CARDS_PER_SPREAD]
+        placed: list[int | None] = [None, None, None, None]
+        for offset, slot in enumerate((0, 2, 1, 3)):
+            if offset < len(window):
+                placed[slot] = window[offset]
+        return tuple(placed)
+
+    def _page_slots(self, page: pygame.Rect) -> tuple[pygame.Rect, pygame.Rect]:
+        gap = max(6, page.height // 28)
+        slot_h = (page.height - gap) // 2
+        top = pygame.Rect(page.left, page.top, page.width, slot_h)
+        bottom = pygame.Rect(page.left, top.bottom + gap, page.width, page.bottom - (top.bottom + gap))
+        return top, bottom
+
+    def _fitted_rect(self, image: pygame.Surface, slot: pygame.Rect) -> pygame.Rect:
+        scale = min(slot.width / image.get_width(), slot.height / image.get_height())
+        size = (max(1, int(image.get_width() * scale)), max(1, int(image.get_height() * scale)))
+        rect = pygame.Rect(0, 0, size[0], size[1])
+        rect.center = slot.center
+        return rect
+
+    def _blit_fitted(self, surf: pygame.Surface, image: pygame.Surface, slot: pygame.Rect) -> None:
+        rect = self._fitted_rect(image, slot)
+        surf.blit(pygame.transform.smoothscale(image, rect.size), rect)
+
+    def _compose_page(self, card_ids: tuple[int | None, int | None], size: tuple[int, int]) -> pygame.Surface:
+        key = ("page", card_ids, size)
+        cached = self._card_cache.get(key)
+        if cached is not None:
+            return cached
+        page = pygame.Surface(size, pygame.SRCALPHA)
+        local = pygame.Rect(0, 0, size[0], size[1])
+        for fid, slot in zip(card_ids, self._page_slots(local)):
+            if fid is not None:
+                self._blit_fitted(page, self.dictionary_cards[fid], slot)
+        self._card_cache[key] = page
+        return page
+
+    def _turning_sheet(
+        self,
+        side: int,
+        card_ids: tuple[int | None, int | None],
+        half_rect: pygame.Rect,
+        card_page: pygame.Rect,
+    ) -> pygame.Surface:
+        key = ("sheet", side, card_ids, half_rect.size)
+        cached = self._card_cache.get(key)
+        if cached is not None:
+            return cached
+        sheet = self.page_halves[side].copy()
+        local_page = card_page.move(-half_rect.left, -half_rect.top)
+        for fid, slot in zip(card_ids, self._page_slots(local_page)):
+            if fid is not None:
+                self._blit_fitted(sheet, self.dictionary_cards[fid], slot)
+        self._card_cache[key] = sheet
+        return sheet
+
+    def _hinge_blit(
+        self,
+        surf: pygame.Surface,
+        image: pygame.Surface,
+        rect: pygame.Rect,
+        scale: float,
+        hinge: str,
+    ) -> None:
+        scale = max(0.0, min(1.0, scale))
+        if scale <= 0.02:
+            return
+        new_w = max(1, int(rect.width * scale))
+        scaled = pygame.transform.smoothscale(image, (new_w, rect.height))
+        x = rect.left if hinge == "left" else rect.right - new_w
+        surf.blit(scaled, (x, rect.top))
+        shade = pygame.Surface((new_w, rect.height), pygame.SRCALPHA)
+        shade.fill((48, 28, 12, int(110 * (1 - scale))))
+        surf.blit(shade, (x, rect.top))
+
+    def _draw_spread(self, surf: pygame.Surface, spread: int, left_rect: pygame.Rect, right_rect: pygame.Rect) -> None:
+        ids = self._spread_ids(spread)
+        surf.blit(self._compose_page(ids[0:2], left_rect.size), left_rect)
+        surf.blit(self._compose_page(ids[2:4], right_rect.size), right_rect)
+
+    def _draw_stitch(self, surf: pygame.Surface, origin: tuple[int, int]) -> None:
+        mid = self.book_image.get_width() // 2
+        surf.blit(self.book_stitch, (origin[0] + mid - self.page_gutter, origin[1]))
+
+    def _draw_page_turn(self, surf: pygame.Surface, left_rect: pygame.Rect, right_rect: pygame.Rect) -> None:
+        origin, _, _ = self._book_geometry()
+        left_half, right_half = self._half_rects(origin)
+        anim = self.page_anim
+        t = max(0.0, min(1.0, anim["t"]))
+        src_ids = self._spread_ids(anim["from"])
+        dst_ids = self._spread_ids(anim["target"])
+        src_left = self._turning_sheet(0, src_ids[0:2], left_half, left_rect)
+        src_right = self._turning_sheet(1, src_ids[2:4], right_half, right_rect)
+        dst_left = self._turning_sheet(0, dst_ids[0:2], left_half, left_rect)
+        dst_right = self._turning_sheet(1, dst_ids[2:4], right_half, right_rect)
+        if anim["direction"] > 0:
+            surf.blit(self.page_halves[0], left_half)
+            surf.blit(dst_right, right_half)
+            self._draw_stitch(surf, origin)
+            surf.blit(self._compose_page(src_ids[0:2], left_rect.size), left_rect)
+            if t < 0.5:
+                self._hinge_blit(surf, src_right, right_half, 1 - smoothstep(t / 0.5), "left")
+            else:
+                self._hinge_blit(surf, dst_left, left_half, smoothstep((t - 0.5) / 0.5), "right")
+        else:
+            surf.blit(dst_left, left_half)
+            surf.blit(self.page_halves[1], right_half)
+            self._draw_stitch(surf, origin)
+            surf.blit(self._compose_page(src_ids[2:4], right_rect.size), right_rect)
+            if t < 0.5:
+                self._hinge_blit(surf, src_left, left_half, 1 - smoothstep(t / 0.5), "right")
+            else:
+                self._hinge_blit(surf, dst_right, right_half, smoothstep((t - 0.5) / 0.5), "left")
+
     def _draw_dictionary(self, surf: pygame.Surface) -> None:
-        overlay = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
-        overlay.fill((10, 6, 4, 160))
-        surf.blit(overlay, (0, 0))
+        origin, left_rect, right_rect = self._book_geometry()
+        turning = self.page_anim is not None
+        if not turning:
+            surf.blit(self.book_image, origin)
 
-        book = pygame.Rect(260, 100, 760, 500)
-        draw_paper(surf, book, tilt=-1)
-
-        entries = sorted(self.progress.dictionary_ids)
-        title = self.fonts["title"].render("Fallacy Dictionary", True, TEXT_DARK)
-        surf.blit(title, title.get_rect(center=(book.centerx, book.top + 44)))
-
+        entries = self._dictionary_entries()
         if not entries:
             empty = self.fonts["body"].render("No fallacies collected yet.", True, TEXT_DARK)
-            surf.blit(empty, empty.get_rect(center=book.center))
+            surf.blit(empty, empty.get_rect(center=self.book_image.get_rect(topleft=origin).center))
             return
 
-        self.dictionary_page %= len(entries)
-        fid = entries[self.dictionary_page]
-        fallacy = FALLACIES_BY_ID[fid]
+        spreads = self._spread_count()
+        self.dictionary_page %= spreads
+        if not turning:
+            self._draw_spread(surf, self.dictionary_page, left_rect, right_rect)
+            shown = self.dictionary_page
+        else:
+            self._draw_page_turn(surf, left_rect, right_rect)
+            shown = self.page_anim["from"]
 
-        y = book.top + 110
-        name_text = fallacy.name + (f" ({fallacy.alt_name})" if fallacy.alt_name else "")
-        name = self.fonts["large"].render(name_text, True, TEXT_DARK)
-        surf.blit(name, (book.left + 50, y))
-        y += 60
-
-        for line in wrap_text(fallacy.definition, self.fonts["body"], book.width - 100):
-            label = self.fonts["body"].render(line, True, TEXT_DARK)
-            surf.blit(label, (book.left + 50, y))
-            y += self.fonts["body"].get_height() + 2
-        y += 16
-
-        examples = game_data.claims_for(game_data.enemy_for_fallacy(fid), fid)[:2]
-        if examples:
-            header = self.fonts["body_bold"].render("Example", True, TEXT_DARK)
-            surf.blit(header, (book.left + 50, y))
-            y += header.get_height() + 8
-            for claim in examples:
-                for line in wrap_text(f"“{claim}”", self.fonts["body"], book.width - 100):
-                    label = self.fonts["body"].render(line, True, TEXT_DARK)
-                    surf.blit(label, (book.left + 50, y))
-                    y += self.fonts["body"].get_height() + 2
-                y += 14
-
+        shown_ids = [fid for fid in self._spread_ids(shown) if fid is not None]
+        positions = [entries.index(fid) + 1 for fid in shown_ids]
         page_label = self.fonts["small"].render(
-            f"{self.dictionary_page + 1} / {len(entries)}", True, TEXT_DARK
+            f"{min(positions)}–{max(positions)} / {len(entries)}", True, TEXT_DARK
         )
-        surf.blit(page_label, page_label.get_rect(center=(book.centerx, book.bottom - 30)))
+        book_rect = self.book_image.get_rect(topleft=origin)
+        surf.blit(page_label, page_label.get_rect(midbottom=(book_rect.centerx, book_rect.bottom - 42)))
+        if self.zoomed_card is not None:
+            self._draw_zoomed_card(surf)
+
+    def _draw_zoomed_card(self, surf: pygame.Surface) -> None:
+        image = self.detail_cards.get(self.zoomed_card)
+        if image is None:
+            return
+        dim = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
+        dim.fill((16, 10, 8, 150))
+        surf.blit(dim, (0, 0))
+        fit = min(980 / image.get_width(), 620 / image.get_height())
+        scale = 0.72 + 0.28 * smoothstep(self.zoom_t)
+        width = max(1, int(image.get_width() * fit * scale))
+        height = max(1, int(image.get_height() * fit * scale))
+        scaled = pygame.transform.smoothscale(image, (width, height))
+        surf.blit(scaled, scaled.get_rect(center=(VIRTUAL_W // 2, VIRTUAL_H // 2)))
+
+    def _draw_review_flashcard(self, surf: pygame.Surface) -> None:
+        image = self.detail_cards.get(self.review_fallacy_id)
+        if image is None:
+            return
+        if self.review_age < FEEDBACK_ENTER_SECONDS:
+            scale = 0.6 + 0.24 * (self.review_age / FEEDBACK_ENTER_SECONDS)
+        else:
+            scale = 0.9
+
+        dest = self._fitted_card(image, (900, 420), (VIRTUAL_W // 2, 510))
+        dest = pygame.Rect(0, 0, max(1, int(dest.width * scale)), max(1, int(dest.height * scale)))
+        dest.center = (VIRTUAL_W // 2, 450)
+        scaled = pygame.transform.smoothscale(image, dest.size)
+        shadow = pygame.Surface(scaled.get_size(), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (20, 10, 6, 70), shadow.get_rect(), border_radius=18)
+        surf.blit(shadow, dest.move(0, 8))
+        surf.blit(scaled, dest)
 
     def _draw_settings(self, surf: pygame.Surface) -> None:
         paper = SETTINGS_PAPER_RECT
@@ -1248,15 +1829,20 @@ class Game:
         title = self.fonts["large"].render("Settings", True, TEXT_DARK)
         surf.blit(title, title.get_rect(center=(paper.centerx, paper.top + 200)))
 
-        rows = (("Background Music", self.audio.music_on), ("Sound Effects", self.audio.sfx_on))
-        for rect, (text, on) in zip(SETTINGS_ROW_RECTS, rows):
-            label = self.fonts["body"].render(text, True, (70, 55, 40))
-            surf.blit(label, label.get_rect(midleft=(rect.left, rect.centery)))
-            switch = pygame.Rect(0, 0, 64, 32)
-            switch.midright = (rect.right, rect.centery)
-            pygame.draw.rect(surf, CORRECT_COLOR if on else (170, 160, 150), switch, border_radius=16)
-            knob_x = switch.right - 16 if on else switch.left + 16
-            pygame.draw.circle(surf, (255, 255, 255), (knob_x, switch.centery), 12)
+        rows = (("Music", self.audio.music_volume), ("Sound Effects", self.audio.sfx_volume))
+        for rect, track, (text, volume) in zip(SETTINGS_ROW_RECTS, SETTINGS_SLIDER_RECTS, rows):
+            label = self.fonts["small"].render(text, True, (70, 55, 40))
+            surf.blit(label, label.get_rect(topleft=(rect.left, rect.top - 4)))
+            pct = self.fonts["small"].render(f"{round(volume * 100)}%", True, (70, 55, 40))
+            surf.blit(pct, pct.get_rect(topright=(rect.right, rect.top - 4)))
+            pygame.draw.rect(surf, (170, 160, 150), track, border_radius=4)
+            filled = track.copy()
+            filled.width = round(track.width * volume)
+            if filled.width:
+                pygame.draw.rect(surf, CORRECT_COLOR, filled, border_radius=4)
+            knob = (track.left + filled.width, track.centery)
+            pygame.draw.circle(surf, (255, 255, 255), knob, 11)
+            pygame.draw.circle(surf, (120, 100, 80), knob, 11, 2)
             pygame.draw.line(surf, (215, 200, 180), (rect.left, rect.bottom + 6), (rect.right, rect.bottom + 6), 1)
 
         if self.show_reset_confirm:
@@ -1287,7 +1873,6 @@ async def main() -> None:
     game.layout_buttons()
 
     running = True
-    mouse_press_handled = False
     while running:
         dt = clock.tick(60) / 1000.0
         window_size = screen.get_size()
@@ -1299,18 +1884,16 @@ async def main() -> None:
             elif event.type == pygame.VIDEORESIZE:
                 screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not portrait:
+                # Activate on release so a click that focuses the window still
+                # reaches the button on platforms that swallow the initial press.
                 vpos = window_to_virtual(event.pos, screen.get_size())
-                game.handle_click(vpos)
-                game.layout_buttons()
-                mouse_press_handled = True
-            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                # Some window managers consume the first press while focusing
-                # the game window. Handle the release if no press reached us.
-                if not mouse_press_handled and not portrait:
-                    vpos = window_to_virtual(event.pos, screen.get_size())
+                if not game.handle_press(vpos):
                     game.handle_click(vpos)
-                    game.layout_buttons()
-                mouse_press_handled = False
+                game.layout_buttons()
+            elif event.type == pygame.MOUSEMOTION:
+                game.handle_drag(window_to_virtual(event.pos, screen.get_size()))
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                game.handle_release()
 
         if not portrait:
             game.update(dt)

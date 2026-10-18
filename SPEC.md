@@ -20,13 +20,24 @@ The dictionary is a book containing every fallacy collected so far. Each entry i
 
 ## Progression
 
-Each level introduces six additional fallacies in this exact order:
+There are six levels. Each introduces three new fallacies, in this exact order, and each enemy hosts two consecutive levels:
 
-| Level | Fallacies | Total available |
-|---|---|---:|
-| 1 | 1–6 | 6 |
-| 2 | 7–12 | 12 |
-| 3 | 13–18 | 18 |
+| Level | Enemy | New fallacies | Total available |
+|---|---|---|---:|
+| 1 | Vegetable Peeler | 1–3 | 3 |
+| 2 | Vegetable Peeler | 4–6 | 6 |
+| 3 | Knife | 7–9 | 9 |
+| 4 | Knife | 10–12 | 12 |
+| 5 | Boiling Pot | 13–15 | 15 |
+| 6 | Boiling Pot | 16–18 | 18 |
+
+Each level runs in three stages:
+
+1. **Introduction:** all three new fallacy cards appear side by side. The player adds each one to the dictionary.
+2. **Warm-up:** one question per new fallacy. Misses and timeouts cost no health; the same fallacy is asked again until answered correctly.
+3. **Official round:** questions are drawn from every fallacy unlocked up to and including this level, weighted toward unmastered and frequently missed ones.
+
+Levels unlock in order: a level opens once the previous one is completed.
 
 1. Personal Attack (Ad Hominem) — attacking the person instead of the argument.
 2. Bandwagon (Appeal to Popularity) — claiming something is true because many people believe it.
@@ -63,10 +74,10 @@ If a level is failed and restarted, all fallacies already collected in that leve
 
 ## Health, timer, and failure
 
-- The player starts each level with five carrot health pieces.
-- Correct answers may restore health, up to the five-piece maximum.
-- Wrong answers and timeouts subtract health.
-- When all five pieces are gone, the player loses the level.
+- In main levels, both the player (five carrot pieces, top left) and the opponent (five pips, top right) have health bars. Neither ever heals.
+- A wrong answer or timeout in the official round removes one player piece; a correct answer removes one opponent pip.
+- The level ends when either bar is empty: the opponent's empty bar completes the level, the player's empty bar fails it. Fallacy mastery is still tracked but no longer decides the win.
+- Infinite mode keeps the original rule instead: only the player has a health bar, a correct answer restores one piece (up to five), and a wrong answer removes one.
 - The health bar is drawn from the five individual carrot illustrations in `carrot_heath_bar.png`, one distinct illustration per health-piece slot, rather than five copies of a single icon.
 - Each claim has its own countdown; a timeout counts as an incorrect answer.
 - Completing Level 3 completes the game.
@@ -223,9 +234,9 @@ The supplied reference screens establish the visual language for the game:
 
 - Papers move continuously around the gameplay area.
 - Every question always has exactly one correct answer.
-- Level 1 displays one correct answer and three incorrect answers.
-- Level 2 displays one correct answer and five incorrect answers.
-- Level 3 displays one correct answer and seven incorrect answers.
+- Levels 1–2 (Peeler) display one correct answer and three incorrect answers.
+- Levels 3–4 (Knife) display one correct answer and five incorrect answers.
+- Levels 5–6 (Boiling Pot) display one correct answer and seven incorrect answers.
 - Clicking an incorrect paper makes all papers disappear, applies one health-piece of damage, and advances to the feedback/next-question state.
 - A correct click also ends the current paper sequence and advances after feedback.
 
@@ -299,11 +310,19 @@ Each enemy has a unique claim set, even when testing the same fallacy. Claims sh
 
 ## Replay and infinite mode
 
-- Completed levels remain replayable.
+- Completed levels remain replayable in normal mode.
 - Dictionary entries, fallacy mastery counts, and level completion data are preserved during replay.
-- When a completed level is replayed, it enters infinite mode rather than normal progression.
+- Infinite mode is its own button at the top of the level-select screen. It unlocks after the first completed level.
+- Infinite mode introduces no new fallacies; it quizzes only fallacies already in the dictionary.
+- Each question is delivered by a random enemy from the levels completed so far.
+- Answer papers start at four (one correct) and grow by one every two correct answers, up to eight.
 - Infinite mode gradually shortens the time available for each guess.
-- Infinite mode continues until the player loses all carrot health; its primary goal is to measure how long the player can survive.
+- Infinite mode continues until the player loses all carrot health; the best survival time is saved.
+
+## Pause
+
+- Every level and infinite mode has a pause button in the top-left corner. Pausing freezes the timer and hides the answer papers.
+- The pause popup offers **Continue** and **Exit Game**. Exiting a main level shows the Level Failed card; exiting infinite mode returns to level select with no popup.
 
 ## Character emotion states
 

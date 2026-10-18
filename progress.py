@@ -19,6 +19,8 @@ _DEFAULT_STATE = {
     "mastered_ids": [],  # fallacy ids mastered
     "completed_levels": [],  # level numbers completed at least once
     "infinite_best_seconds": {},  # level (str) -> best survival seconds
+    "music_volume": 0.7,
+    "sfx_volume": 0.7,
 }
 
 
@@ -33,6 +35,8 @@ class Progress:
         self.mastered_ids: set[int] = set()
         self.completed_levels: set[int] = set()
         self.infinite_best_seconds: dict[int, float] = {}
+        self.music_volume = 0.7
+        self.sfx_volume = 0.7
         self.load()
 
     # -- serialization ---------------------------------------------------
@@ -46,6 +50,8 @@ class Progress:
             "infinite_best_seconds": {
                 str(k): v for k, v in self.infinite_best_seconds.items()
             },
+            "music_volume": self.music_volume,
+            "sfx_volume": self.sfx_volume,
         }
 
     def _apply(self, state: dict) -> None:
@@ -58,6 +64,8 @@ class Progress:
         self.infinite_best_seconds = {
             int(k): v for k, v in state.get("infinite_best_seconds", {}).items()
         }
+        self.music_volume = float(state.get("music_volume", _DEFAULT_STATE["music_volume"]))
+        self.sfx_volume = float(state.get("sfx_volume", _DEFAULT_STATE["sfx_volume"]))
 
     # -- load/save ---------------------------------------------------
 
@@ -104,7 +112,10 @@ class Progress:
                 pass
 
     def reset(self) -> None:
+        # Volume is a preference, not progress, so it survives a reset.
+        volumes = (self.music_volume, self.sfx_volume)
         self._apply(dict(_DEFAULT_STATE))
+        self.music_volume, self.sfx_volume = volumes
         self.save()
 
     # -- mutators ---------------------------------------------------

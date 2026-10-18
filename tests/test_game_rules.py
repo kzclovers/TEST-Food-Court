@@ -68,8 +68,19 @@ class WeightingTests(unittest.TestCase):
 class WrongOptionCountTests(unittest.TestCase):
     def test_level_option_counts_match_spec(self):
         self.assertEqual(game_rules.wrong_option_count(1), 3)
-        self.assertEqual(game_rules.wrong_option_count(2), 5)
-        self.assertEqual(game_rules.wrong_option_count(3), 7)
+        self.assertEqual(game_rules.wrong_option_count(2), 3)
+        self.assertEqual(game_rules.wrong_option_count(3), 5)
+        self.assertEqual(game_rules.wrong_option_count(4), 5)
+        self.assertEqual(game_rules.wrong_option_count(5), 7)
+        self.assertEqual(game_rules.wrong_option_count(6), 7)
+
+    def test_infinite_papers_grow_every_two_correct_up_to_eight(self):
+        self.assertEqual(game_rules.infinite_option_count(0), 4)
+        self.assertEqual(game_rules.infinite_option_count(1), 4)
+        self.assertEqual(game_rules.infinite_option_count(2), 5)
+        self.assertEqual(game_rules.infinite_option_count(7), 7)
+        self.assertEqual(game_rules.infinite_option_count(8), 8)
+        self.assertEqual(game_rules.infinite_option_count(100), 8)
 
 
 class InfiniteTimingTests(unittest.TestCase):

@@ -1,11 +1,10 @@
 """Static game content: fallacy definitions and enemy claim banks.
 
 Fallacy ids are 1-18 and match the introduction order in SPEC.md. The
-numbered `DictionaryCard` assets in `assets/` use a different internal
-order, so they are not used as the teaching source here -- the prototype
-draws its own teaching cards from this module instead. A fallacy's two
-dictionary/teaching-card examples are the first two claims in its
-enemy's claim bank below (see `claims_for`), not a separate field here.
+numbered card files run in the opposite order (#18 and DictionaryCard18
+are fallacy 1). Book pages use the curved DictionaryCard images. Clicking
+one enlarges `Dictionary Card/#`, and a wrong answer pops that same card
+without collecting it. Every two rounds, `Add cards/#` is the lesson.
 """
 
 from __future__ import annotations
@@ -66,10 +65,15 @@ FALLACIES: list[Fallacy] = [
 
 FALLACIES_BY_ID: dict[int, Fallacy] = {f.id: f for f in FALLACIES}
 
+ENEMIES: list[str] = ["Vegetable Peeler", "Knife", "Boiling Pot"]
+
+# Six levels, three new fallacies each; each enemy hosts two levels.
 LEVELS: dict[int, dict] = {
-    1: {"enemy": "Vegetable Peeler", "fallacy_ids": list(range(1, 7))},
-    2: {"enemy": "Knife", "fallacy_ids": list(range(7, 13))},
-    3: {"enemy": "Boiling Pot", "fallacy_ids": list(range(13, 19))},
+    level: {
+        "enemy": ENEMIES[(level - 1) // 2],
+        "fallacy_ids": list(range(level * 3 - 2, level * 3 + 1)),
+    }
+    for level in range(1, 7)
 }
 
 ENEMY_PERSONALITY: dict[str, str] = {
@@ -81,10 +85,9 @@ ENEMY_PERSONALITY: dict[str, str] = {
     "small kitchen problem into a catastrophe.",
 }
 
-# Claim banks, keyed by enemy name then fallacy id. Only the Level 1
-# enemy (Vegetable Peeler) is filled in for the first prototype milestone.
-# The first two claims in each list double as that fallacy's teaching
-# card / dictionary examples.
+# Claim banks, keyed by enemy name then fallacy id. Official rounds quiz
+# every fallacy unlocked so far, so each enemy also has claims for the
+# fallacies taught before its own levels.
 CLAIMS: dict[str, dict[int, list[str]]] = {
     "Vegetable Peeler": {
         1: [
@@ -135,14 +138,221 @@ CLAIMS: dict[str, dict[int, list[str]]] = {
             "kitchen must think I'm useless!",
         ],
     },
-    "Knife": {},
-    "Boiling Pot": {},
+    "Knife": {
+        1: [
+            "Why listen to Tomato's argument? Tomato is soft, squishy, and "
+            "can't even stand up straight.",
+            "Tomato's point about kitchen safety is worthless, because "
+            "Tomato is just a lumpy red vegetable.",
+        ],
+        2: [
+            "Every knife in the block agrees I'm the best blade here, and "
+            "that many knives can't be wrong.",
+            "Everyone in this kitchen thinks Tomato is guilty, so Tomato "
+            "must be guilty.",
+        ],
+        3: [
+            "You can't convict me, chef. I've been stuck in that dark knife "
+            "block for weeks and it's so lonely in there.",
+            "I've been sharpened so many times my edge aches, so you have "
+            "to believe my side of the story.",
+        ],
+        4: [
+            "The toaster, who has never once worked in a courtroom, says "
+            "Tomato is guilty. That settles it.",
+            "A famous pop singer said knives are always honest, so I must "
+            "be telling the truth.",
+        ],
+        5: [
+            "Either you let me off right now, or you admit you hate every "
+            "utensil in this kitchen.",
+            "Chef, either Tomato confesses today or Tomato is lying forever. "
+            "There's no other possibility.",
+        ],
+        6: [
+            "I saw one tomato get squished once, so every tomato is weak "
+            "and untrustworthy.",
+            "The chef dropped one plate last week, so clearly the chef "
+            "can't hold onto anything.",
+        ],
+        7: [
+            "Tomato says I should be stored more carefully. So Tomato wants "
+            "every knife in this kitchen locked away forever? Ridiculous!",
+            "The chef suggested I cut a little slower. Apparently the chef "
+            "thinks I'm a reckless maniac who can't be trusted near food!",
+            "Tomato thinks knives should be sharpened less often. So Tomato "
+            "wants every meal chopped with a dull, useless blade? Typical.",
+        ],
+        8: [
+            "Who cares whether I nicked the cutting board? Let's talk about "
+            "how messy the spice drawer has gotten lately!",
+            "You want to know why the bread was sliced crooked? Well, have "
+            "you noticed the oven clock has been wrong for weeks?",
+            "Forget about the scratched counter. The real issue is that "
+            "nobody has watered the basil on the windowsill!",
+        ],
+        9: [
+            "You're scolding me for chipping a plate? What about the time "
+            "Tomato rolled off the counter and splattered everywhere?",
+            "Sure, I scratched the cutting board, but the peeler scratched "
+            "it worse last week, so why pick on me?",
+            "How dare you call me careless! Tomato got seeds all over the "
+            "floor yesterday.",
+        ],
+        10: [
+            "I'm the most trustworthy utensil in this kitchen because no "
+            "utensil here is more trustworthy than me.",
+            "My cuts are always right, because any cut I make is the "
+            "correct cut.",
+            "Tomato is guilty because Tomato is the one who did it.",
+        ],
+        11: [
+            "Nobody has proven I dulled the chef's cleaver, so I clearly "
+            "had nothing to do with it.",
+            "No one can prove Tomato didn't knock over the salt, so Tomato "
+            "definitely did it.",
+            "There's no evidence I'm not the sharpest knife in the world, "
+            "so I must be.",
+        ],
+        12: [
+            "Tomato walked into the kitchen, and five minutes later the soup "
+            "boiled over. Tomato obviously caused it!",
+            "The chef started wearing a new apron, and the next day the "
+            "bread burned. That apron is cursed!",
+            "I got sharpened this morning, and then the sun came out. My "
+            "sharpening brings good weather!",
+        ],
+    },
+    "Boiling Pot": {
+        1: [
+            "Don't trust a word of Tomato's testimony! Tomato is wrinkly, "
+            "bruised, and a disgrace to the produce aisle!",
+            "Tomato's argument about stove safety means nothing coming from "
+            "a vegetable that has never even been cooked!",
+        ],
+        2: [
+            "Every pan, pot, and kettle in this kitchen says Tomato is "
+            "guilty, and we can't ALL be wrong!",
+            "Everybody already believes the soup was ruined on purpose, so "
+            "it must be true!",
+        ],
+        3: [
+            "Have mercy! My handle is cracked and my bottom is scorched, so "
+            "you simply must rule in my favor!",
+            "Think of how much I've suffered, boiling all day long. Surely "
+            "that proves I'm innocent!",
+        ],
+        4: [
+            "A famous movie star said soup pots are never to blame, so I "
+            "can't be blamed!",
+            "My neighbor the blender says Tomato is guilty, and the blender "
+            "spins so fast it must be brilliant!",
+        ],
+        5: [
+            "Either we punish Tomato right now, or we admit that kitchen "
+            "rules mean nothing! Choose!",
+            "Chef, you either love soup or you hate it. If you won't defend "
+            "me, you must hate soup!",
+        ],
+        6: [
+            "The soup boiled over once, so every soup I ever make will be a "
+            "disaster!",
+            "One carrot was mushy today, so every vegetable in this kitchen "
+            "has gone bad!",
+        ],
+        7: [
+            "Tomato says I should simmer instead of boil. So Tomato wants "
+            "every meal served cold and raw?! Outrageous!",
+            "The chef asked me to use less salt. So the chef wants every "
+            "dish to taste like plain water?!",
+        ],
+        8: [
+            "Why are we talking about the spilled broth when the dishwasher "
+            "has been making strange noises all week?!",
+            "You want to discuss the burned rice? Fine, but first, has "
+            "anyone noticed how dusty the top shelf is?!",
+        ],
+        9: [
+            "You're blaming me for boiling over? What about the time the "
+            "kettle whistled through the whole dinner rush?!",
+            "So I splashed some soup. Tomato leaked juice all over the "
+            "counter last week, and nobody punished Tomato!",
+        ],
+        10: [
+            "My soup is the best soup because no soup is better than my "
+            "soup!",
+            "Tomato is a troublemaker because Tomato is someone who makes "
+            "trouble!",
+        ],
+        11: [
+            "Nobody has proven my soup is too salty, so it must be "
+            "perfectly seasoned!",
+            "No one can show that Tomato didn't spill the broth, so Tomato "
+            "definitely spilled it!",
+        ],
+        12: [
+            "Tomato rolled past my stove, and then my lid started rattling. "
+            "Tomato made my lid rattle!",
+            "The chef sneezed this morning, and an hour later the soup "
+            "burned. That sneeze ruined dinner!",
+        ],
+        13: [
+            "If we let Tomato off with a warning, soon every vegetable will "
+            "break the rules and the whole kitchen will burn down!",
+            "If the chef turns my heat down one notch today, tomorrow I'll "
+            "be cold, and by next week nobody will ever cook soup again!",
+            "If one crumb stays on the counter tonight, the ants move in, "
+            "then the mice, and the restaurant closes forever!",
+        ],
+        14: [
+            "Tomato is red, and fire is red. So Tomato is just as dangerous "
+            "as a fire in this kitchen!",
+            "A kitchen is basically a battlefield, so the chef should be "
+            "allowed to throw pans at anyone who makes a mistake!",
+            "I hold soup and the ocean holds water, so I deserve the same "
+            "respect as the ocean!",
+        ],
+        15: [
+            "They say a good judge needs a sharp mind. The knife is sharp, "
+            "so the knife should be the judge!",
+            "The chef told me to keep a cool head. My lid is cold right now, "
+            "so I'm doing exactly what the chef asked!",
+            "Tomato says I'm full of hot air. Hot air is steam, and steam "
+            "cooks soup, so Tomato admits I'm the best cook here!",
+        ],
+        16: [
+            "Tomato, why did you sabotage the soup on purpose?",
+            "Chef, how long have you been secretly favoring the vegetables "
+            "over us pots?",
+            "Tomato, have you stopped splashing juice on my clean lid yet?",
+        ],
+        17: [
+            "The soup tasted perfect on Tuesday, so I'm a flawless pot. "
+            "Let's not mention the six times it burned this month.",
+            "Tomato was late once in March, so Tomato is unreliable. Never "
+            "mind the hundred days Tomato showed up on time.",
+            "One customer loved the stew, so everyone loves my cooking. "
+            "Ignore the stack of complaint cards by the door.",
+        ],
+        18: [
+            "Fine, Tomato proved the salt was gone before Tomato arrived. "
+            "But now Tomato has to prove the pepper wasn't touched either!",
+            "You showed me the receipt for the onions? That doesn't count "
+            "unless you also have a photo of the chef buying them!",
+            "So Tomato passed the freshness test. Well, now Tomato must pass "
+            "a ripeness test, a color test, and a shine test too!",
+        ],
+    },
 }
 
 
 def claims_for(enemy: str, fallacy_id: int) -> list[str]:
     """Return the claim bank for an enemy/fallacy pair, or an empty list."""
     return CLAIMS.get(enemy, {}).get(fallacy_id, [])
+
+
+def enemy_for_level(level: int) -> str:
+    return LEVELS[level]["enemy"]
 
 
 def enemy_for_fallacy(fallacy_id: int) -> str:
