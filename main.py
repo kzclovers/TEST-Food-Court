@@ -322,10 +322,22 @@ class Button:
 
 
 class Paper:
-    def __init__(self, text: str, is_correct: bool, bounds: pygame.Rect, rng: random.Random):
+    def __init__(
+        self,
+        text: str,
+        is_correct: bool,
+        bounds: pygame.Rect,
+        rng: random.Random,
+        backgrounds: list[pygame.Surface] | None = None,
+    ):
         self.text = text
         self.is_correct = is_correct
         self.w, self.h = 196, 64
+        background = rng.choice(backgrounds) if backgrounds else None
+        self.background = (
+            pygame.transform.smoothscale(background, (self.w, self.h))
+            if background is not None else None
+        )
         self.x = rng.uniform(bounds.left, max(bounds.left, bounds.right - self.w))
         self.y = rng.uniform(bounds.top, max(bounds.top, bounds.bottom - self.h))
         angle = rng.uniform(0, 2 * math.pi)
@@ -355,7 +367,10 @@ class Paper:
 
     def draw(self, surf: pygame.Surface, font: pygame.font.Font) -> None:
         r = self.rect()
-        pygame.draw.rect(surf, PAPER_FILL, r, border_radius=10)
+        if self.background is not None:
+            surf.blit(self.background, r)
+        else:
+            pygame.draw.rect(surf, PAPER_FILL, r, border_radius=10)
         pygame.draw.rect(surf, PAPER_BORDER, r, width=2, border_radius=10)
         lines = wrap_text(self.text, font, r.width - 14)[:3]
         total_h = len(lines) * (font.get_height() - 2)
@@ -446,6 +461,11 @@ class Game:
         self.bg = pygame.transform.smoothscale(
             load_image("Background.png", (VIRTUAL_W, VIRTUAL_H), (60, 38, 26)), (VIRTUAL_W, VIRTUAL_H)
         )
+        # Each moving answer paper gets one randomly chosen food-themed backdrop.
+        self.fallacy_paper_backgrounds = [
+            load_image(f"bg_fallacies/{name}_bg.png")
+            for name in ("bread", "lettuce", "cheese", "bacon")
+        ]
         self.bg_faded = pygame.transform.smoothscale(
             load_image("background_faded.png", (VIRTUAL_W, VIRTUAL_H), (90, 60, 40)), (VIRTUAL_W, VIRTUAL_H)
         )
@@ -692,7 +712,10 @@ class Game:
         entries = [(FALLACIES_BY_ID[correct_id].name, True)]
         entries += [(FALLACIES_BY_ID[i].name, False) for i in wrong_ids]
         self.rng.shuffle(entries)
-        self.papers = [Paper(text, is_correct, PAPER_BOUNDS, self.rng) for text, is_correct in entries]
+        self.papers = [
+            Paper(text, is_correct, PAPER_BOUNDS, self.rng, self.fallacy_paper_backgrounds)
+            for text, is_correct in entries
+        ]
 
     def handle_paper_click(self, pos: tuple[int, int]) -> None:
         if self.state != "GAMEPLAY" or self.answered or self.dialogue_phase != "DONE":
@@ -720,6 +743,7 @@ class Game:
             elif warmup:
                 if self.warmup_queue and self.warmup_queue[0] == fid:
                     self.warmup_queue.pop(0)
+                self.enemy_health = max(0, self.enemy_health - 1)
             else:
                 self.enemy_health = max(0, self.enemy_health - 1)
             self.enemy_losses += 1
@@ -1188,8 +1212,10 @@ class Game:
             health_frame = self.health_frames[
                 min(len(self.health_frames) - 1, game_rules.HEALTH_MAX - self.health)
             ]
-            surf.blit(health_frame, (92, 14))
-        draw_outlined_text(surf, self.fonts["small"], "Tomato", (150, 84), width=2)
+            # Mirror the rendered UI sprite; the source sprite sheet is unchanged.
+            flipped_health_frame = pygame.transform.flip(health_frame, True, False)
+            surf.blit(flipped_health_frame, (92, 14))
+        draw_outlined_text(surf, self.fonts["body_bold"], "You", (150, 84), width=2)
 
         if self.infinite:
             title = "Infinite Mode"
@@ -1199,18 +1225,22 @@ class Game:
         draw_outlined_text(surf, self.fonts["large"], title, (VIRTUAL_W // 2, 34), width=3)
 
     def _draw_opponent_bar(self, surf: pygame.Surface) -> None:
-        """Five pips, top right; they empty from the left as the enemy is hit."""
-        pip_w, pip_h, gap = 40, 26, 6
-        total = game_rules.OPPONENT_HEALTH_MAX
-        right = VIRTUAL_W - 28
-        left = right - total * pip_w - (total - 1) * gap
-        for i in range(total):
-            rect = pygame.Rect(left + i * (pip_w + gap), 24, pip_w, pip_h)
-            full = i >= total - self.enemy_health
-            pygame.draw.rect(surf, (60, 34, 20), rect.move(2, 3), border_radius=8)
-            pygame.draw.rect(surf, INCORRECT_COLOR if full else (120, 100, 90), rect, border_radius=8)
-            pygame.draw.rect(surf, (255, 240, 225), rect, 2, border_radius=8)
-        draw_outlined_text(surf, self.fonts["small"], self.enemy_name, ((left + right) // 2, 70), width=2)
+        """Show the enemy's health with the same carrot damage sprites as Tomato."""
+        if self.enemy_health > 0:
+            frame_index = min(
+                len(self.health_frames) - 1,
+                game_rules.OPPONENT_HEALTH_MAX - self.enemy_health,
+            )
+            frame = self.health_frames[frame_index]
+            surf.blit(frame, frame.get_rect(topright=(VIRTUAL_W - 18, 14)))
+
+        draw_outlined_text(
+            surf,
+            self.fonts["small"],
+            self.enemy_name,
+            (VIRTUAL_W - 92 - 140, 84),
+            width=2,
+        )
 
     def _draw_pause_popup(self, surf: pygame.Surface) -> None:
         dim = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)

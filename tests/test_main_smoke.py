@@ -108,7 +108,7 @@ class GameSmokeTests(unittest.TestCase):
         self.assertEqual(self.game.state, "LEVEL_FAILED")
         self.assertLess(steps, 500)
         self.assertEqual(self.game.health, 0)
-        self.assertEqual(self.game.enemy_health, 5)
+        self.assertEqual(self.game.enemy_health, 2)
 
     def test_all_three_cards_are_introduced_together(self):
         self.game._open_level_select()
@@ -149,7 +149,7 @@ class GameSmokeTests(unittest.TestCase):
             self._finish_feedback()
         self.assertEqual(sorted(asked), [1, 2, 3])
         self.assertEqual(self.game.phase, "ROUND")
-        self.assertEqual(self.game.enemy_health, 5)
+        self.assertEqual(self.game.enemy_health, 2)
 
     def test_official_round_damages_both_sides_without_healing(self):
         self._start_level_one_round()
@@ -165,7 +165,7 @@ class GameSmokeTests(unittest.TestCase):
         self.game.resolve_answer(True, timeout=False)
         self._finish_feedback()
         self.assertEqual(self.game.health, 5)
-        self.assertEqual(self.game.enemy_health, 4)
+        self.assertEqual(self.game.enemy_health, 1)
 
     def test_official_round_only_asks_unlocked_fallacies(self):
         self.game.progress.completed_levels.add(1)
