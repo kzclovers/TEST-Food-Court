@@ -23,6 +23,8 @@ Open the URL printed by Pygbag. Pygbag serves files during local development; th
 
 The browser build requires a network connection on its first load for Pygbag's runtime assets. Gameplay is local after loading.
 
+To host the browser build on Render, see [DEPLOY.md](DEPLOY.md).
+
 ## How the prototype works
 
 The game starts at Level 1. Click **Continue**, read each new teaching card, and click **Add to Dictionary**. Read Vegetable Peeler's claim and click the moving paper that names its fallacy before the 10-second timer expires. Correct answers restore one carrot piece; wrong answers and timeouts remove one. Each fallacy is mastered after three correct identifications. Master all six to win. A completed level can be replayed in infinite mode.
