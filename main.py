@@ -79,7 +79,19 @@ ENEMY_SHEETS = {
     "Knife": "Knife_SpriteSheet.png",
     "Boiling Pot": "Pot_SpriteSheet.png",
 }
+# Knife and pot sprites have lots of empty width, so they draw wider to
+# cover about the same area as the peeler.
+ENEMY_DRAW_WIDTHS = {"Knife": 520, "Boiling Pot": 300}
 SETTINGS_PAPER_RECT = pygame.Rect(450, 50, 380, 600)
+SETTINGS_RESET_RECT = pygame.Rect(475, 606, 110, 24)
+DEV_INPUT_RECT = pygame.Rect(500, 494, 280, 34)
+DEV_SWITCH_RECT = pygame.Rect(700, 540, 64, 30)
+DEV_PASSWORD = "dev67"
+HOVER_SCALE = 1.05
+MENU_PAPER_RECT = pygame.Rect(460, 90, 360, 490)
+MENU_PAPER_TILT = -3
+MENU_LINK_TOP = 296
+MENU_LINK_STEP = 56
 SETTINGS_ROW_RECTS = [pygame.Rect(500, 330, 280, 50), pygame.Rect(500, 410, 280, 50)]
 # Slider track per settings row: the label sits above, the track below it.
 SETTINGS_SLIDER_RECTS = [pygame.Rect(r.left + 10, r.bottom - 12, r.width - 20, 8) for r in SETTINGS_ROW_RECTS]
@@ -123,6 +135,25 @@ def slice_sheet(sheet: pygame.Surface, count: int, cell: int = 1024) -> list[pyg
 
 def scale_square(img: pygame.Surface, size: int) -> pygame.Surface:
     return pygame.transform.smoothscale(img, (size, size))
+
+
+def cover_scale(img: pygame.Surface, size: tuple[int, int]) -> pygame.Surface:
+    """Scale to fill `size` keeping the aspect ratio, cropping the overflow evenly."""
+    scale = max(size[0] / img.get_width(), size[1] / img.get_height())
+    scaled = pygame.transform.smoothscale(
+        img, (max(size[0], round(img.get_width() * scale)), max(size[1], round(img.get_height() * scale)))
+    )
+    crop = pygame.Rect(0, 0, *size)
+    crop.center = scaled.get_rect().center
+    return scaled.subsurface(crop).copy()
+
+
+def menu_line_right(y: float) -> int:
+    """x of the tilted menu paper's inner right margin at screen height y."""
+    paper = MENU_PAPER_RECT
+    half_inner = paper.width / 2 - 12
+    angle = math.radians(-MENU_PAPER_TILT)
+    return round(paper.centerx + half_inner * math.cos(angle) - (y - paper.centery) * math.sin(angle))
 
 
 def wrap_text(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
@@ -285,10 +316,11 @@ class Button:
     label drawn underneath as a caption), "link" (checkbox + underlined text
     on paper), "hidden" (hit area only; the screen draws the visuals)."""
 
-    __slots__ = ("rect", "label", "action", "enabled", "radius", "style", "icon")
+    __slots__ = ("rect", "label", "action", "enabled", "radius", "style", "icon", "fill", "border", "image",
+                 "hovered")
 
     def __init__(self, rect: pygame.Rect, label: str, action, enabled: bool = True, radius: int = 14,
-                 style: str = "pill", icon: str = ""):
+                 style: str = "pill", icon: str = "", fill=None, border=None, image=None):
         self.rect = rect
         self.label = label
         self.action = action
@@ -296,34 +328,61 @@ class Button:
         self.radius = radius
         self.style = style
         self.icon = icon
+        self.fill = fill
+        self.border = border
+        self.image = image
+        self.hovered = False
 
-    def draw(self, surf: pygame.Surface, font: pygame.font.Font) -> None:
+    def _draw_rect(self) -> pygame.Rect:
+        """Enabled buttons grow slightly while the cursor is over them."""
+        if not (self.hovered and self.enabled):
+            return self.rect
+        grown = pygame.Rect(0, 0, round(self.rect.width * HOVER_SCALE), round(self.rect.height * HOVER_SCALE))
+        grown.center = self.rect.center
+        return grown
+
+    def draw(self, surf: pygame.Surface, font: pygame.font.Font, bold_font: pygame.font.Font | None = None) -> None:
         if self.style == "hidden":
             return
-        if self.style == "icon":
-            r = self.rect.width // 2
-            pygame.draw.circle(surf, (120, 60, 25), (self.rect.centerx + 2, self.rect.centery + 4), r)
-            pygame.draw.circle(surf, BUTTON_FILL, self.rect.center, r)
-            pygame.draw.circle(surf, (245, 225, 200), self.rect.center, r - 5, 3)
-            draw_icon(surf, self.icon, self.rect.center, round(r * 1.0), (255, 250, 240))
-            if self.label:
-                draw_outlined_text(surf, font, self.label, (self.rect.centerx, self.rect.bottom + 18), width=2)
-            return
         if self.style == "link":
-            box = pygame.Rect(self.rect.left, 0, 20, 20)
-            box.centery = self.rect.centery
+            # Notebook checklist item: the text sits on the ruled line, which
+            # runs to the paper's right margin. Hover bolds it and ticks the box.
+            hover = self.hovered and bold_font is not None
+            text_font = bold_font if hover else font
+            baseline = self.rect.bottom - 4
+            box = pygame.Rect(self.rect.left, 0, 22, 22)
+            box.bottom = baseline - 4
             pygame.draw.rect(surf, (90, 70, 50), box, 2, border_radius=3)
-            label = font.render(self.label, True, (90, 70, 50))
-            pos = label.get_rect(midleft=(box.right + 14, self.rect.centery))
+            if hover:
+                draw_icon(surf, "check", (box.centerx + 2, box.centery - 1), 20, (0, 0, 0))
+            label = text_font.render(self.label, True, (90, 70, 50))
+            pos = label.get_rect(left=box.right + 14, top=baseline - text_font.get_ascent())
             surf.blit(label, pos)
-            pygame.draw.line(surf, (110, 90, 70), (pos.left, pos.bottom + 2), (self.rect.right, pos.bottom + 2), 2)
+            pygame.draw.line(surf, (110, 90, 70), (pos.left, baseline + 2), (self.rect.right, baseline + 2), 2)
             return
-        fill = BUTTON_FILL if self.enabled else (150, 130, 110)
-        border = BUTTON_BORDER if self.enabled else (110, 95, 80)
-        pygame.draw.rect(surf, fill, self.rect, border_radius=self.radius)
-        pygame.draw.rect(surf, border, self.rect, width=3, border_radius=self.radius)
+        rect = self._draw_rect()
+        if self.style == "icon":
+            r = rect.width // 2
+            pygame.draw.circle(surf, (120, 60, 25), (rect.centerx + 2, rect.centery + 4), r)
+            pygame.draw.circle(surf, BUTTON_FILL, rect.center, r)
+            pygame.draw.circle(surf, (245, 225, 200), rect.center, r - 5, 3)
+            draw_icon(surf, self.icon, rect.center, round(r * 1.0), (255, 250, 240))
+            if self.label:
+                draw_outlined_text(surf, font, self.label, (rect.centerx, rect.bottom + 18), width=2)
+            return
+        if self.image is not None:
+            image = pygame.transform.smoothscale(self.image, rect.size)
+            if not self.enabled:
+                image.fill((140, 140, 140), special_flags=pygame.BLEND_RGB_MULT)
+            surf.blit(image, rect)
+            draw_outlined_text(surf, font, self.label, rect.center, fill=TEXT_DARK, outline=PAPER_FILL, width=2)
+            return
+        fill = (self.fill or BUTTON_FILL) if self.enabled else (150, 130, 110)
+        border = (self.border or BUTTON_BORDER) if self.enabled else (110, 95, 80)
+        pygame.draw.rect(surf, fill, rect, border_radius=self.radius)
+        pygame.draw.rect(surf, border, rect, width=3 if rect.height > 30 else 2, border_radius=self.radius)
         label = font.render(self.label, True, BUTTON_TEXT)
-        surf.blit(label, label.get_rect(center=self.rect.center))
+        surf.blit(label, label.get_rect(center=rect.center))
 
 
 class Paper:
@@ -412,6 +471,7 @@ class Game:
         }
         self.fonts["title_bold"] = pygame.font.Font(str(font_dir / "Nunito-ExtraBold.ttf"), 54)
         self.fonts["body_bold"] = pygame.font.Font(str(font_dir / "Nunito-Bold.ttf"), 28)
+        self.fonts["large_bold"] = pygame.font.Font(str(font_dir / "Nunito-Bold.ttf"), 40)
         self.banner_cache: dict[tuple[str, tuple[int, int, int]], pygame.Surface] = {}
         self.banner_font = pygame.font.Font(str(font_dir / "Nunito-ExtraBold.ttf"), 84)
 
@@ -429,6 +489,14 @@ class Game:
         self.review_age = 0.0
         self.show_reset_confirm = False
         self.pre_settings_state = "MENU"
+        self.mouse_pos: tuple[float, float] = (-1, -1)
+        # Dev mode is a session-only overlay. Saved progress is never touched,
+        # so switching it off restores exactly what was there before.
+        self.dev_unlocked = False
+        self.dev_mode = False
+        self.dev_input = ""
+        self.dev_input_active = False
+        self.dev_error = False
 
         self.state = "MENU"
         self.level = 1
@@ -478,12 +546,19 @@ class Game:
             load_image(f"bg_fallacies/{name}_bg.png")
             for name in ("bread", "lettuce", "cheese", "bacon")
         ]
-        self.bg_faded = pygame.transform.smoothscale(
+        self.bg_faded = cover_scale(
             load_image("background_faded.png", (VIRTUAL_W, VIRTUAL_H), (90, 60, 40)), (VIRTUAL_W, VIRTUAL_H)
         )
         self.logo = load_image("LOGO_food_court.png", (600, 460), (214, 122, 54))
         self.logo_small = pygame.transform.smoothscale(
             self.logo, (110, round(110 * self.logo.get_height() / self.logo.get_width()))
+        )
+        self.logo_small_faded = self.logo_small.copy()
+        self.logo_small_faded.set_alpha(128)
+        self.bread_button = self.fallacy_paper_backgrounds[0]
+        # Same canvas as Background.png, so it is scaled the same way to line up.
+        self.tables = pygame.transform.smoothscale(
+            load_image("tables.png", (VIRTUAL_W, VIRTUAL_H), (0, 0, 0, 0)), (VIRTUAL_W, VIRTUAL_H)
         )
         self.dictionary_icon = load_image("dictionary icon.PNG", (48, 64), (214, 122, 54))
         book = load_image("Untitled_Artwork 9.png", BOOK_CROP.size, (255, 247, 206))
@@ -602,6 +677,11 @@ class Game:
         self.teaching_ids = list(self.fallacy_ids)
         self.teaching_added = set()
         self.warmup_queue = []
+        if all(fid in self._dictionary_ids() for fid in self.fallacy_ids):
+            # Nothing new to learn, so skip the cards and the warm-up.
+            self.phase = "ROUND"
+            self.next_question()
+            return
         self.phase = "WARMUP"
         self.state = "TEACHING"
 
@@ -614,13 +694,18 @@ class Game:
         self.infinite_start_ms = pygame.time.get_ticks()
         self.next_question()
 
+    def _dictionary_ids(self) -> set[int]:
+        if self.dev_mode:
+            return {f.id for f in FALLACIES}
+        return self.progress.dictionary_ids
+
     def _completed_enemies(self) -> list[str]:
-        names = [game_data.enemy_for_level(lvl) for lvl in sorted(self.progress.completed_levels)
-                 if lvl in game_data.LEVELS]
+        levels = sorted(game_data.LEVELS) if self.dev_mode else sorted(self.progress.completed_levels)
+        names = [game_data.enemy_for_level(lvl) for lvl in levels if lvl in game_data.LEVELS]
         return list(dict.fromkeys(names))
 
     def _infinite_fallacy_ids(self) -> list[int]:
-        return sorted(self.progress.dictionary_ids)
+        return sorted(self._dictionary_ids())
 
     def _infinite_available(self) -> bool:
         return bool(self._completed_enemies()) and bool(self._infinite_fallacy_ids())
@@ -632,7 +717,7 @@ class Game:
             return self.warmup_queue[:1]
         # Official round: everything unlocked up to and including this level.
         newest = max(self.fallacy_ids)
-        return [fid for fid in sorted(self.progress.dictionary_ids) if fid <= newest] or list(self.fallacy_ids)
+        return [fid for fid in sorted(self._dictionary_ids()) if fid <= newest] or list(self.fallacy_ids)
 
     def on_add_to_dictionary(self, fid: int | None = None) -> None:
         """Collect one of the three new cards; once all are in, warm up."""
@@ -652,7 +737,7 @@ class Game:
             self.warmup_queue = list(self.teaching_ids)
             self.rng.shuffle(self.warmup_queue)
             self.phase = "WARMUP"
-            self.toasts.append(["Warm-up: mistakes cost health.", TOAST_DURATION])
+            self.toasts.append(["Warm-up: no timer, no damage.", TOAST_DURATION])
             self.next_question()
 
     # -- questions ---------------------------------------------------
@@ -766,8 +851,9 @@ class Game:
             self.review_clicks = 0
             self.audio.play_sfx("correct")
         else:
-            # Wrong answers always cost one health, including during warm-up.
-            self.health = max(0, self.health - 1)
+            # The warm-up is practice: misses repeat the card but cost nothing.
+            if not warmup:
+                self.health = max(0, self.health - 1)
             self.audio.play_sfx("chomp")
             self.tomato_flash = FLASH_DURATION
             self.result_label = "TIME OUT" if timeout else "INCORRECT"
@@ -845,15 +931,17 @@ class Game:
         self.paused = False
 
     def _exit_level(self) -> None:
-        """Leaving a main level counts as failing it; leaving infinite mode is silent."""
+        """Exit Game always returns to the levels page without a result popup.
+
+        Infinite mode still saves the run's time if it is a new best.
+        """
         self.paused = False
         self.papers = []
         self.review_fallacy_id = None
         if self.infinite:
-            self.state = "LEVEL_SELECT"
-        else:
-            self.fail_reason = "You left the courtroom."
-            self.state = "LEVEL_FAILED"
+            survived = (pygame.time.get_ticks() - self.infinite_start_ms) / 1000.0
+            self.progress.record_infinite_result(INFINITE_SAVE_KEY, survived)
+        self.state = "LEVEL_SELECT"
 
     # -- update ---------------------------------------------------
 
@@ -873,7 +961,8 @@ class Game:
             if self.dialogue_phase != "DONE":
                 self._advance_dialogue(dt)
             else:
-                self.timer -= dt
+                if self._timer_running():
+                    self.timer -= dt
                 if self.timer <= 0:
                     self.timer = 0
                     self.resolve_answer(False, timeout=True)
@@ -906,6 +995,10 @@ class Game:
         for toast in self.toasts:
             toast[1] -= dt
         self.toasts = [t for t in self.toasts if t[1] > 0]
+
+    def _timer_running(self) -> bool:
+        """Warm-up questions have no time limit."""
+        return self.infinite or self.phase != "WARMUP"
 
     # -- frame emotion mapping ---------------------------------------------------
 
@@ -953,16 +1046,20 @@ class Game:
                                        style="icon", icon="gear"))
 
         if self.state == "MENU":
-            self.buttons.append(Button(pygame.Rect(520, 300, 250, 40), "How to Play", self._open_how_to_play, style="link"))
-            self.buttons.append(Button(pygame.Rect(520, 350, 250, 40), "Dictionary", self._open_dictionary, style="link"))
-            self.buttons.append(Button(pygame.Rect(520, 400, 250, 40), "Settings", self._open_settings, style="link"))
-            self.buttons.append(Button(pygame.Rect(510, 470, 260, 64), "Start", self._open_level_select))
+            for i, (label, action) in enumerate((("Instructions", self._open_how_to_play),
+                                                 ("Dictionary", self._open_dictionary),
+                                                 ("Settings", self._open_settings))):
+                top = MENU_LINK_TOP + i * MENU_LINK_STEP
+                right = menu_line_right(top + MENU_LINK_STEP)
+                self.buttons.append(Button(pygame.Rect(510, top, right - 510, MENU_LINK_STEP), label, action,
+                                           style="link"))
+            self.buttons.append(Button(pygame.Rect(510, 480, 260, 64), "Enter", self._open_level_select))
         elif self.state == "HOW_TO_PLAY":
             self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._go_menu, style="icon", icon="return"))
         elif self.state == "LEVEL_SELECT":
             self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._go_menu, style="icon", icon="return"))
             self.buttons.append(Button(INFINITE_BUTTON_RECT, "Infinite Mode", self.start_infinite,
-                                       enabled=self._infinite_available()))
+                                       enabled=self._infinite_available(), image=self.bread_button))
             for level, rect in zip(sorted(game_data.LEVELS), LEVEL_CIRCLE_RECTS):
                 unlocked = self._level_unlocked(level)
                 action = (lambda lvl=level: self._select_level(lvl)) if unlocked else self._noop
@@ -1030,13 +1127,16 @@ class Game:
     def _layout_settings_buttons(self) -> None:
         self.buttons.append(Button(RETURN_BUTTON_RECT, "return", self._close_settings,
                                    style="icon", icon="return"))
-        for rect, action in zip(SETTINGS_ROW_RECTS, (self._toggle_music, self._toggle_sfx)):
-            self.buttons.append(Button(rect, "", action, style="hidden"))
+        self.buttons.append(Button(DEV_INPUT_RECT, "", self._focus_dev_input, style="hidden"))
+        if self.dev_unlocked:
+            self.buttons.append(Button(DEV_SWITCH_RECT, "", self._toggle_dev_mode, style="hidden"))
+        red = dict(fill=INCORRECT_COLOR, border=(120, 30, 24), radius=7)
         if self.show_reset_confirm:
-            self.buttons.append(Button(pygame.Rect(505, 530, 130, 46), "Yes, Reset", self._confirm_reset))
-            self.buttons.append(Button(pygame.Rect(645, 530, 130, 46), "Cancel", self._cancel_reset))
+            self.buttons.append(Button(SETTINGS_RESET_RECT, "Yes, Reset", self._confirm_reset, **red))
+            self.buttons.append(Button(SETTINGS_RESET_RECT.move(SETTINGS_RESET_RECT.width + 10, 0), "Cancel",
+                                       self._cancel_reset, radius=7))
         else:
-            self.buttons.append(Button(pygame.Rect(530, 530, 220, 46), "Reset Progress", self._ask_reset))
+            self.buttons.append(Button(SETTINGS_RESET_RECT, "Reset Progress", self._ask_reset, **red))
 
     # -- button callbacks ---------------------------------------------------
 
@@ -1061,7 +1161,7 @@ class Game:
         self.zoomed_card = None
 
     def _dictionary_entries(self) -> list[int]:
-        return sorted(self.progress.dictionary_ids)
+        return sorted(self._dictionary_ids())
 
     def _spread_starts(self) -> list[int]:
         """Each picture is a window of four cards, two on each page.
@@ -1109,7 +1209,41 @@ class Game:
 
     def _close_settings(self) -> None:
         self.show_reset_confirm = False
+        self.dev_input_active = False
         self.state = self.pre_settings_state
+
+    def _focus_dev_input(self) -> None:
+        self.dev_input_active = True
+
+    def _toggle_dev_mode(self) -> None:
+        self.dev_mode = not self.dev_mode
+        self._card_cache.clear()
+
+    def handle_key(self, event: pygame.event.Event) -> None:
+        """Typing into the dev password box on the settings page."""
+        if self.state != "SETTINGS" or not self.dev_input_active:
+            return
+        if event.type == pygame.TEXTINPUT:
+            if len(self.dev_input) < 20:
+                self.dev_input += event.text
+            self.dev_error = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_BACKSPACE:
+                self.dev_input = self.dev_input[:-1]
+                self.dev_error = False
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.submit_dev_password()
+            elif event.key == pygame.K_ESCAPE:
+                self.dev_input_active = False
+
+    def submit_dev_password(self) -> None:
+        if self.dev_input == DEV_PASSWORD:
+            self.dev_unlocked = True
+            self.dev_input_active = False
+            self.dev_error = False
+        else:
+            self.dev_error = True
+        self.dev_input = ""
 
     def _set_slider(self, index: int, x: float) -> None:
         track = SETTINGS_SLIDER_RECTS[index]
@@ -1176,7 +1310,7 @@ class Game:
         """Levels open in order: each needs the previous one completed."""
         if level not in game_data.LEVELS:
             return False
-        return level == 1 or (level - 1) in self.progress.completed_levels
+        return self.dev_mode or level == 1 or (level - 1) in self.progress.completed_levels
 
     def _select_level(self, level: int) -> None:
         if self._level_unlocked(level):
@@ -1195,6 +1329,8 @@ class Game:
     # -- event handling ---------------------------------------------------
 
     def handle_click(self, pos: tuple[int, int]) -> None:
+        if self.state == "SETTINGS" and not DEV_INPUT_RECT.collidepoint(pos):
+            self.dev_input_active = False
         for button in self.buttons:
             if button.enabled and button.rect.collidepoint(pos):
                 self.audio.play_sfx("click")
@@ -1216,7 +1352,8 @@ class Game:
                         "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS")
         surf.blit(self.bg_faded if self.state in faded_states else self.bg, (0, 0))
         if self.state in ("LEVEL_SELECT", "LEVEL_COMPLETE", "LEVEL_FAILED", "INFINITE_RESULTS"):
-            surf.blit(self.logo_small, self.logo_small.get_rect(bottomright=(VIRTUAL_W - 24, VIRTUAL_H - 16)))
+            logo = self.logo_small_faded if self.state == "LEVEL_SELECT" else self.logo_small
+            surf.blit(logo, logo.get_rect(bottomright=(VIRTUAL_W - 24, VIRTUAL_H - 16)))
 
         if self.state == "MENU":
             self._draw_menu(surf)
@@ -1248,17 +1385,30 @@ class Game:
 
         self._draw_ui_buttons(surf)
 
+        if self.state == "MENU" and not self.paused:
+            # The little tomato sits in front of the checklist and Enter button.
+            tomato = pygame.transform.smoothscale(self.tomato_frames[0], (64, 64))
+            surf.blit(tomato, tomato.get_rect(bottomright=(800, 500)))
+
+    def _is_hovered(self, rect: pygame.Rect) -> bool:
+        return rect.collidepoint(self.mouse_pos)
+
     def _draw_ui_buttons(self, surf: pygame.Surface) -> None:
         for button in self.buttons:
+            button.hovered = button.style != "hidden" and self._is_hovered(button.rect)
             if button.style == "icon":
                 font = self.fonts["body_bold"]
             elif button.style == "link":
                 font = self.fonts["large"]
-            elif button.label == "Start":
+            elif button.label == "Enter":
                 font = self.fonts["title_bold"]
+            elif button.rect.height < 30:
+                font = self.fonts["paper"]
+            elif button.image is not None:
+                font = self.fonts["body_bold"]
             else:
                 font = self.fonts["body"]
-            button.draw(surf, font)
+            button.draw(surf, font, self.fonts["large_bold"])
 
     def _draw_hud(self, surf: pygame.Surface) -> None:
         if self.health > 0:
@@ -1304,14 +1454,12 @@ class Game:
         surf.blit(label, label.get_rect(center=(PAUSE_POPUP_RECT.centerx, PAUSE_POPUP_RECT.top + 62)))
 
     def _draw_menu(self, surf: pygame.Surface) -> None:
-        paper = pygame.Rect(460, 90, 360, 490)
-        draw_paper(surf, paper, tilt=-3)
+        paper = MENU_PAPER_RECT
+        draw_paper(surf, paper, tilt=MENU_PAPER_TILT)
         logo = pygame.transform.smoothscale(
             self.logo, (300, int(300 * self.logo.get_height() / self.logo.get_width()))
         )
         surf.blit(logo, logo.get_rect(midtop=(paper.centerx, 30)))
-        tomato = pygame.transform.smoothscale(self.tomato_frames[0], (64, 64))
-        surf.blit(tomato, tomato.get_rect(bottomright=(785, 482)))
 
     def _draw_how_to_play(self, surf: pygame.Surface) -> None:
         panel = pygame.Rect(240, 90, 800, 540)
@@ -1321,7 +1469,7 @@ class Game:
 
         lines = [
             "Each level teaches three new fallacies. Add all three cards",
-            "to your dictionary, then warm up -- wrong answers cost health.",
+            "to your dictionary, then warm up -- no timer, no damage.",
             "",
             "In the official round, click the moving paper that names the",
             "fallacy in each claim before the ten-second timer runs out.",
@@ -1353,7 +1501,10 @@ class Game:
             enemy = game_data.enemy_for_level(level)
             pygame.draw.circle(surf, (60, 34, 20), (rect.centerx + 3, rect.centery + 5), rect.width // 2)
             portrait = self.enemy_portraits[enemy] if unlocked else self.enemy_portraits_locked[enemy]
-            surf.blit(portrait, rect)
+            if unlocked and self._is_hovered(rect):
+                size = round(rect.width * HOVER_SCALE)
+                portrait = pygame.transform.smoothscale(portrait, (size, size))
+            surf.blit(portrait, portrait.get_rect(center=rect.center))
             if not unlocked:
                 draw_icon(surf, "lock", rect.center, 64, (245, 245, 245))
             label = f"LVL {level}" if unlocked else "LOCKED"
@@ -1406,6 +1557,7 @@ class Game:
 
         chef = self.chef_frames[0]
         surf.blit(chef, chef.get_rect(midbottom=CHEF_ANCHOR))
+        surf.blit(self.tables, (0, 0))
 
         self.tomato.draw(
             surf,
@@ -1417,9 +1569,12 @@ class Game:
             shake_duration=FLASH_DURATION,
         )
 
+        enemy_width = ENEMY_DRAW_WIDTHS.get(self.enemy_name, CHARACTER_SIZE)
+        # Wide sprites shift left just enough to stay on screen.
+        enemy_anchor = (min(ENEMY_ANCHOR[0], VIRTUAL_W - 10 - enemy_width // 2), ENEMY_ANCHOR[1])
         self.enemies.get(self.enemy_name, self.peeler).draw(
-            surf, self._enemy_frame_index(), ENEMY_ANCHOR,
-            CHARACTER_SIZE,
+            surf, self._enemy_frame_index(), enemy_anchor,
+            enemy_width,
             flip_x=True,
             damaged=self.enemy_flash > 0,
             shake_time=FLASH_DURATION - self.enemy_flash,
@@ -1441,14 +1596,15 @@ class Game:
             claim_box = voice_box
 
         if self.state == "GAMEPLAY" and self.dialogue_phase == "DONE":
-            bar_w = 300
-            pct = 0 if self.timer_max <= 0 else max(0.0, self.timer / self.timer_max)
-            bar_rect = pygame.Rect(0, 0, bar_w, 16)
-            bar_rect.midtop = (VIRTUAL_W // 2, 70)
-            pygame.draw.rect(surf, (90, 60, 40), bar_rect, border_radius=8)
-            fill_rect = pygame.Rect(bar_rect.left, bar_rect.top, int(bar_w * pct), bar_rect.height)
-            pygame.draw.rect(surf, (235, 190, 90), fill_rect, border_radius=8)
-            pygame.draw.rect(surf, PANEL_BORDER, bar_rect, width=2, border_radius=8)
+            if self._timer_running():
+                bar_w = 300
+                pct = 0 if self.timer_max <= 0 else max(0.0, self.timer / self.timer_max)
+                bar_rect = pygame.Rect(0, 0, bar_w, 16)
+                bar_rect.midtop = (VIRTUAL_W // 2, 70)
+                pygame.draw.rect(surf, (90, 60, 40), bar_rect, border_radius=8)
+                fill_rect = pygame.Rect(bar_rect.left, bar_rect.top, int(bar_w * pct), bar_rect.height)
+                pygame.draw.rect(surf, (235, 190, 90), fill_rect, border_radius=8)
+                pygame.draw.rect(surf, PANEL_BORDER, bar_rect, width=2, border_radius=8)
 
 
     #floating ingredients fallacies
@@ -1773,6 +1929,8 @@ class Game:
         self.dictionary_page %= spreads
         if not turning:
             self._draw_spread(surf, self.dictionary_page, left_rect, right_rect)
+            if self.zoomed_card is None:
+                self._draw_hovered_card(surf, left_rect, right_rect)
             shown = self.dictionary_page
         else:
             self._draw_page_turn(surf, left_rect, right_rect)
@@ -1787,6 +1945,20 @@ class Game:
         surf.blit(page_label, page_label.get_rect(midbottom=(book_rect.centerx, book_rect.bottom - 42)))
         if self.zoomed_card is not None:
             self._draw_zoomed_card(surf)
+
+    def _draw_hovered_card(self, surf: pygame.Surface, left_rect: pygame.Rect, right_rect: pygame.Rect) -> None:
+        """Redraw the card under the cursor slightly larger, on top of the page."""
+        ids = self._spread_ids(self.dictionary_page)
+        slots = self._page_slots(left_rect) + self._page_slots(right_rect)
+        for fid, slot in zip(ids, slots):
+            if fid is None:
+                continue
+            rect = self._fitted_rect(self.dictionary_cards[fid], slot)
+            if self._is_hovered(rect):
+                grown = pygame.Rect(0, 0, round(rect.width * HOVER_SCALE), round(rect.height * HOVER_SCALE))
+                grown.center = rect.center
+                surf.blit(pygame.transform.smoothscale(self.dictionary_cards[fid], grown.size), grown)
+                return
 
     def _draw_zoomed_card(self, surf: pygame.Surface) -> None:
         image = self.detail_cards.get(self.zoomed_card)
@@ -1845,10 +2017,37 @@ class Game:
             pygame.draw.circle(surf, (120, 100, 80), knob, 11, 2)
             pygame.draw.line(surf, (215, 200, 180), (rect.left, rect.bottom + 6), (rect.right, rect.bottom + 6), 1)
 
+        self._draw_dev_controls(surf)
+
         if self.show_reset_confirm:
-            for i, line in enumerate(("Erase all saved dictionary", "and progress?")):
-                warn = self.fonts["small"].render(line, True, INCORRECT_COLOR)
-                surf.blit(warn, warn.get_rect(center=(paper.centerx, 486 + i * 20)))
+            warn = self.fonts["paper"].render("Erase all saved dictionary and progress?", True, INCORRECT_COLOR)
+            surf.blit(warn, warn.get_rect(bottomleft=(SETTINGS_RESET_RECT.left, SETTINGS_RESET_RECT.top - 4)))
+
+    def _draw_dev_controls(self, surf: pygame.Surface) -> None:
+        box = DEV_INPUT_RECT
+        label = self.fonts["small"].render("Dev password", True, (70, 55, 40))
+        surf.blit(label, label.get_rect(bottomleft=(box.left, box.top - 2)))
+        pygame.draw.rect(surf, (255, 252, 244), box, border_radius=6)
+        edge = BUTTON_FILL if self.dev_input_active else (150, 130, 110)
+        pygame.draw.rect(surf, edge, box, 2, border_radius=6)
+        masked = "*" * len(self.dev_input)
+        if self.dev_input_active and (pygame.time.get_ticks() // 500) % 2 == 0:
+            masked += "|"
+        text = self.fonts["small"].render(masked, True, TEXT_DARK)
+        surf.blit(text, text.get_rect(midleft=(box.left + 10, box.centery)))
+        if self.dev_error:
+            err = self.fonts["paper"].render("Wrong password", True, INCORRECT_COLOR)
+            surf.blit(err, err.get_rect(topright=(box.right, box.bottom + 4)))
+        if not self.dev_unlocked:
+            return
+        switch = DEV_SWITCH_RECT
+        caption = self.fonts["small"].render("Unlock everything", True, (70, 55, 40))
+        surf.blit(caption, caption.get_rect(midleft=(box.left, switch.centery)))
+        track = CORRECT_COLOR if self.dev_mode else (170, 160, 150)
+        pygame.draw.rect(surf, track, switch, border_radius=switch.height // 2)
+        r = switch.height // 2 - 3
+        knob_x = switch.right - r - 3 if self.dev_mode else switch.left + r + 3
+        pygame.draw.circle(surf, (255, 255, 255), (knob_x, switch.centery), r)
 
 
 def window_to_virtual(pos: tuple[int, int], window_size: tuple[int, int]) -> tuple[int, int]:
@@ -1891,7 +2090,10 @@ async def main() -> None:
                     game.handle_click(vpos)
                 game.layout_buttons()
             elif event.type == pygame.MOUSEMOTION:
-                game.handle_drag(window_to_virtual(event.pos, screen.get_size()))
+                game.mouse_pos = window_to_virtual(event.pos, screen.get_size())
+                game.handle_drag(game.mouse_pos)
+            elif event.type in (pygame.KEYDOWN, pygame.TEXTINPUT):
+                game.handle_key(event)
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 game.handle_release()
 

@@ -31,6 +31,8 @@ SFX_FILES = {
 }
 
 DEFAULT_VOLUME = 0.7
+# The music files are mastered loud, so the slider's 100% plays at half volume.
+MUSIC_GAIN = 0.5
 
 
 def clamp_volume(value: float) -> float:
@@ -76,7 +78,7 @@ class AudioManager:
             return
         try:
             pygame.mixer.music.load(str(MUSIC_DIR / filename))
-            pygame.mixer.music.set_volume(self.music_volume)
+            pygame.mixer.music.set_volume(self.music_volume * MUSIC_GAIN)
             pygame.mixer.music.play(loops=-1)
         except (pygame.error, FileNotFoundError):
             return
@@ -90,7 +92,7 @@ class AudioManager:
     def set_music_volume(self, volume: float) -> None:
         self.music_volume = clamp_volume(volume)
         if self.enabled:
-            pygame.mixer.music.set_volume(self.music_volume)
+            pygame.mixer.music.set_volume(self.music_volume * MUSIC_GAIN)
 
     def set_sfx_volume(self, volume: float) -> None:
         self.sfx_volume = clamp_volume(volume)
