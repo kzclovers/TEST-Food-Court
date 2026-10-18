@@ -67,6 +67,7 @@ If a level is failed and restarted, all fallacies already collected in that leve
 - Correct answers may restore health, up to the five-piece maximum.
 - Wrong answers and timeouts subtract health.
 - When all five pieces are gone, the player loses the level.
+- The health bar is drawn from the five individual carrot illustrations in `carrot_heath_bar.png`, one distinct illustration per health-piece slot, rather than five copies of a single icon.
 - Each claim has its own countdown; a timeout counts as an incorrect answer.
 - Completing Level 3 completes the game.
 
@@ -74,7 +75,15 @@ The exact timer length, health restoration amount, and number of correct answers
 
 ## Fallacy learning
 
-When a fallacy is introduced, a pop-up card displays its name and definition. After the player dismisses the card, it is added to the dictionary. Mastery requires correctly identifying the fallacy during gameplay; reading the card alone is not mastery.
+When a fallacy is introduced, a pop-up card displays its number, name, definition, and two example claims. After the player dismisses the card, it is added to the dictionary. Mastery requires correctly identifying the fallacy during gameplay; reading the card alone is not mastery.
+
+### Teaching card layout
+
+- A white, rounded-corner card centered on a dark backdrop, with a small orange sparkle/asterisk accent near each of the card's four corners.
+- Header row: the fallacy's number and name in large bold text, followed by its parenthetical alternate name (when it has one, e.g. "Bandwagon (Appeal to Popularity)") in smaller bold text on the same line.
+- One line of plain text giving the fallacy's definition.
+- An "Example" label in bold, followed by two quoted example claims, each demonstrating the fallacy in the current enemy's voice.
+- A full-width orange rounded button in title case reading "Add To Your Dictionary" that closes the card and adds the fallacy to the dictionary.
 
 ## Difficulty
 
@@ -92,7 +101,7 @@ The game should feel energetic, humorous, and fast-paced while keeping definitio
 
 Every answer must provide immediate feedback through:
 
-- `CORRECT` or `INCORRECT` full-screen/status bar.
+- A `CORRECT` or `INCORRECT` bar that spans the full width of the screen and animates sliding across it, rather than a small centered banner.
 - Health bar update.
 - A short red losing-character sprite animation.
 - A clear transition to the next claim.
@@ -108,7 +117,8 @@ The player must always understand whether the answer was correct, why health cha
 | `Knife_SpriteSheet.png`, `Peeler_SpriteSheet.png`, `Pot_SpriteSheet.png`, `Tomato_SpriteSheet.png` | Tools, enemies, and character animations |
 | `DictionaryCard01.png`–`DictionaryCard18.png` | Fallacy introduction/dictionary cards |
 | `#01.png`–`#18.png` | Fallacy or encounter illustrations |
-| `carrot_heath_bar.png`, `healthbar_carrot.png` | Player health UI |
+| `carrot_heath_bar.png` | Player health UI -- source of the five distinct health-piece illustrations |
+| `healthbar_carrot.png` | Unused single carrot icon, kept for reference |
 | `dictionary icon.PNG` | Dictionary button |
 
 ## First playable milestone
@@ -165,9 +175,9 @@ Each level contains one continuous enemy encounter. The encounter continues unti
 
 - New fallacies are introduced in the order listed in this specification.
 - During gameplay, available fallacies may appear in any order.
-- A new-fallacy pop-up must include the fallacy name and definition.
-- The player must click an `ADD TO DICTIONARY` button to close the pop-up and continue.
-- Each dictionary entry contains the fallacy definition, one example, and a concise explanation of why the example demonstrates that fallacy.
+- A new-fallacy pop-up must include the fallacy number, name, parenthetical alternate name (when applicable), definition, and two example claims, styled as described in [Teaching card layout](#teaching-card-layout).
+- The player must click the `Add To Your Dictionary` button to close the pop-up and continue.
+- Each dictionary entry contains the fallacy definition and the two example claims shown when the fallacy was introduced.
 
 ### Visual direction
 
@@ -205,7 +215,7 @@ The supplied reference screens establish the visual language for the game:
 ### Dictionary behavior
 
 - The dictionary is designed as a book with previous-page and next-page controls.
-- Pages show collected fallacy names, definitions, and the example claim shown when the fallacy was first introduced.
+- Pages show collected fallacy names, definitions, and the two example claims shown when the fallacy was first introduced.
 - Dictionary progress persists when the player closes and reopens the browser.
 - Settings will eventually include a reset-game action that clears the persisted dictionary and progression. The username/profile control is intentionally omitted for now.
 
@@ -267,7 +277,7 @@ Each enemy has a unique claim set, even when testing the same fallacy. Claims sh
 
 - Each question has a ten-second timer.
 - When the player clicks a correct answer, papers remain briefly while the correct feedback is displayed.
-- `CORRECT` and `INCORRECT` bars remain visible for two seconds before moving off-screen.
+- `CORRECT` and `INCORRECT` are shown as a full-width bar that animates sliding across the entire screen, remains visible for two seconds, then animates off-screen.
 - When the timer reaches zero, all papers disappear and a `TIME OUT` message is shown.
 - A timeout is treated as an incorrect result and removes one carrot health piece.
 
@@ -330,3 +340,12 @@ Each enemy has a unique claim set, even when testing the same fallacy. Claims sh
 - The player can answer claims using one correct and three or more incorrect moving papers.
 - Fallacy mastery, carrot health, ten-second questions, feedback bars, timeout handling, enemy emotion variants, and the chef’s end-of-level gavel animation are included.
 - The prototype saves dictionary progress, mastery counts, Level 1 completion, and best infinite-mode survival time locally.
+
+## Next iteration
+
+The next milestone after the Level 1 prototype adds the home screen/menu and the level-select page described in [Opening flow](#opening-flow) and [Visual direction](#visual-direction):
+
+- The full-page logo opening screen that morphs/transitions into the main menu.
+- The main menu itself, with Start, How to Play, Dictionary, and Settings options.
+- A level-select screen showing all three enemy portraits, with later levels locked until prior levels are completed.
+- Wiring the existing Level 1 prototype, and the menu/level-select screens, into a single navigable flow (menu -> level select -> gameplay -> back to menu).
